@@ -28,18 +28,33 @@ export default function DashboardClient({ profile, sessions }: Props) {
     if (!title.trim()) return;
     setCreating(true);
 
+    console.log('[ShadowLive] Création session pour profil:', profile.id, 'role:', profile.role);
+
+    const insertData = {
+      domina_id: profile.id,
+      title: title.trim(),
+      status: 'PENDING' as const,
+      agora_channel: crypto.randomUUID(),
+    };
+
+    console.log('[ShadowLive] Données à insérer:', insertData);
+
     const { data, error } = await supabase
       .from('live_sessions')
-      .insert({
-        domina_id: profile.id,
-        title: title.trim(),
-        status: 'PENDING',
-        agora_channel: crypto.randomUUID(),
-      })
+      .insert(insertData)
       .select()
       .single();
 
-    if (!error && data) {
+    console.log('[ShadowLive] Résultat:', { data, error });
+
+    if (error) {
+      console.error('[ShadowLive] Erreur complète:', JSON.stringify(error, null, 2));
+      alert(`Erreur: ${error.message} (code: ${error.code})`);
+      setCreating(false);
+      return;
+    }
+
+    if (data) {
       router.push(`/live/${data.id}`);
     }
     setCreating(false);
