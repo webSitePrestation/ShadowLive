@@ -198,7 +198,7 @@ export default function DashboardClient({ profile, sessions }: Props) {
                   initial={{ opacity: 0, x: -12 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: 0.05 * i }}
-                  onClick={() => router.push(`/live/${session.id}`)}
+                  onClick={() => router.push(session.status === 'ENDED' ? `/session/${session.id}` : `/live/${session.id}`)}
                   className="surface-dark rounded-xl p-4 cursor-pointer active-scale flex items-center gap-3 hover:border-yellow-800/20 transition-colors"
                 >
                   <div className="flex-1 min-w-0">

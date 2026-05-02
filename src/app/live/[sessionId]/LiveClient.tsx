@@ -2,18 +2,22 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mic, MicOff, Video, VideoOff, PhoneOff, Users, Share2, Crown, MessageCircle, X } from 'lucide-react';
+import {
+  Mic, MicOff, Video, VideoOff, PhoneOff,
+  Users, Share2, MessageCircle, UserPlus, X
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { useLiveStream } from '@/hooks/useLiveStream';
+import { useDuoStream } from '@/hooks/useDuoStream';
 import { useChat } from '@/hooks/useChat';
 import { useCoins } from '@/hooks/useCoins';
 import { useViewerCount } from '@/hooks/useViewerCount';
-import VideoStage from '@/components/live/VideoStage';
+import DuoStage from '@/components/live/DuoStage';
 import ChatPanel from '@/components/live/ChatPanel';
 import CoinButton from '@/components/live/CoinButton';
 import CoinRain from '@/components/live/CoinRain';
 import WalletOverlay from '@/components/live/WalletOverlay';
+import DuoInviteModal from '@/components/live/DuoInviteModal';
 import Badge from '@/components/ui/Badge';
 import type { LiveSession, Profile } from '@/types';
 
@@ -30,27 +34,30 @@ export default function LiveClient({ session, profile, domina }: Props) {
   const uidRef = useRef<number>(Math.floor(Math.random() * 100000));
 
   const [isLive, setIsLive] = useState(session.status === 'LIVE');
-  const viewerCount = useViewerCount(session.id, session.viewer_count, isLive);
   const [starting, setStarting] = useState(false);
+  const [agoraReady, setAgoraReady] = useState(false);
+  const [isDuoMode, setIsDuoMode] = useState(false);
+  const [duoUsername, setDuoUsername] = useState('');
+  const [showChat, setShowChat] = useState(true);
+  const [showWallet, setShowWallet] = useState(false);
+  const [showDuo, setShowDuo] = useState(false);
+  const [showInvite, setShowInvite] = useState(false);
+  const [inviteLink, setInviteLink] = useState('');
   const [coinRainTrigger, setCoinRainTrigger] = useState(0);
   const [lastCoinAmount, setLastCoinAmount] = useState(0);
-  const [inviteLink, setInviteLink] = useState('');
-  const [showInvite, setShowInvite] = useState(false);
-  const [showChat, setShowChat] = useState(true);
-  const [agoraReady, setAgoraReady] = useState(false);
-  const [showWallet, setShowWallet] = useState(false);
 
   const {
     localVideoTrack, remoteUsers, joined,
     error: agoraError, micMuted, camOff,
     toggleMic, toggleCam, leave,
-  } = useLiveStream({
+  } = useDuoStream({
     channelName: session.agora_channel,
     uid: uidRef.current,
     role: isDomina ? 'host' : 'audience',
     enabled: agoraReady,
   });
 
+  const viewerCount = useViewerCount(session.id, session.viewer_count, isLive);
   const { messages, sendMessage } = useChat(session.id, profile);
   const { sendCoins, balance } = useCoins(session.id, profile, session.domina_id);
 
@@ -78,6 +85,15 @@ export default function LiveClient({ session, profile, domina }: Props) {
     if (!isDomina && session.status === 'LIVE') setAgoraReady(true);
   }, [isDomina, session.status]);
 
+  // Détecte quand un soumis rejoint en Duo
+  useEffect(() => {
+    if (remoteUsers.length >= 1 && isDomina) {
+      setIsDuoMode(true);
+    } else if (remoteUsers.length === 0) {
+      setIsDuoMode(false);
+    }
+  }, [remoteUsers, isDomina]);
+
   const endLive = useCallback(async () => {
     await leave();
     if (isDomina) {
@@ -95,6 +111,7 @@ export default function LiveClient({ session, profile, domina }: Props) {
       .insert({ session_id: session.id, created_by: profile.id, role: 'SOUMIS' })
       .select()
       .single();
+
     if (data) {
       const link = `${window.location.origin}/join/${data.token}`;
       setInviteLink(link);
@@ -113,43 +130,33 @@ export default function LiveClient({ session, profile, domina }: Props) {
     return success;
   }, [sendCoins, sendMessage]);
 
+  const isSoumisInDuo = !isDomina && remoteUsers.length > 0;
+
   return (
     <div className="fixed inset-0 bg-black flex flex-col overflow-hidden">
       <CoinRain trigger={coinRainTrigger} amount={lastCoinAmount} />
 
       {/* Video */}
       <div className="relative flex-1 overflow-hidden">
-        {isDomina && localVideoTrack ? (
-          <VideoStage track={localVideoTrack} className="w-full h-full" mirror />
-        ) : remoteUsers[0]?.videoTrack ? (
-          <VideoStage track={remoteUsers[0].videoTrack} className="w-full h-full" />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center bg-[#080808]">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="text-center space-y-4"
-            >
-              <div className="w-20 h-20 rounded-full bg-red-900/20 border border-red-800/20 flex items-center justify-center mx-auto">
-                <Crown size={36} className="text-red-700/60" />
-              </div>
-              <p className="text-white/20 text-sm tracking-wide">
-                {isLive ? joined ? 'Caméra non disponible' : 'Connexion...' : 'Live non démarré'}
-              </p>
-            </motion.div>
-          </div>
-        )}
+        <DuoStage
+          localVideoTrack={localVideoTrack}
+          remoteUsers={remoteUsers}
+          isDomina={isDomina}
+          dominaName={domina?.username ?? 'Domina'}
+          soumisName={duoUsername || undefined}
+          isDuoMode={isDuoMode || isSoumisInDuo}
+        />
 
         {/* Gradients */}
-        <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-black/80 to-transparent pointer-events-none" />
-        <div className="absolute inset-x-0 bottom-0 h-3/4 bg-gradient-to-t from-black/95 via-black/40 to-transparent pointer-events-none" />
+        <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-black/80 to-transparent pointer-events-none" />
+        <div className="absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-black/95 via-black/30 to-transparent pointer-events-none" />
 
         {/* Header */}
         <div className="absolute top-0 inset-x-0 p-4 flex items-center justify-between z-10">
           <div className="flex items-center gap-2">
             {isLive ? (
-              <Badge variant="live" className="pulse-live">
-                <span className="w-1.5 h-1.5 rounded-full bg-white" />
+              <Badge variant="live">
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
                 LIVE
               </Badge>
             ) : (
@@ -159,38 +166,41 @@ export default function LiveClient({ session, profile, domina }: Props) {
               <Users size={10} />
               {viewerCount}
             </span>
+            {isDuoMode && (
+              <Badge variant="gold">⚡ DUO</Badge>
+            )}
           </div>
-          <div className="flex items-center gap-3">
+
+          <div className="flex items-center gap-2">
             {isDomina && isLive && (
-              <motion.button
-                whileTap={{ scale: 0.9 }}
-                onClick={generateInvite}
-                className="w-9 h-9 rounded-full glass flex items-center justify-center text-white/50 hover:text-white transition-colors"
-              >
-                <Share2 size={16} />
-              </motion.button>
+              <>
+                <motion.button
+                  whileTap={{ scale: 0.9 }}
+                  onClick={generateInvite}
+                  className="w-9 h-9 rounded-full glass flex items-center justify-center text-white/50 hover:text-white transition-colors"
+                >
+                  <Share2 size={15} />
+                </motion.button>
+                <motion.button
+                  whileTap={{ scale: 0.9 }}
+                  onClick={() => setShowDuo(true)}
+                  className="w-9 h-9 rounded-full glass flex items-center justify-center text-white/50 hover:text-white transition-colors"
+                >
+                  <UserPlus size={15} />
+                </motion.button>
+              </>
             )}
             <motion.button
               whileTap={{ scale: 0.9 }}
               onClick={() => setShowChat(s => !s)}
               className="w-9 h-9 rounded-full glass flex items-center justify-center text-white/50 hover:text-white transition-colors"
             >
-              <MessageCircle size={16} />
+              <MessageCircle size={15} />
             </motion.button>
           </div>
         </div>
 
-        {/* Domina name overlay */}
-        {domina && isLive && (
-          <div className="absolute bottom-28 left-4 z-10">
-            <div className="flex items-center gap-2 glass rounded-full px-3 py-1.5">
-              <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-              <span className="text-white/80 text-xs font-medium">{domina.username}</span>
-            </div>
-          </div>
-        )}
-
-        {/* Invite modal */}
+        {/* Invite link toast */}
         <AnimatePresence>
           {showInvite && (
             <motion.div
@@ -199,24 +209,24 @@ export default function LiveClient({ session, profile, domina }: Props) {
               exit={{ opacity: 0, y: -10 }}
               className="absolute inset-x-4 top-16 z-40 surface-luxury rounded-2xl p-4"
             >
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center justify-between mb-2">
                 <p className="text-yellow-500/70 text-xs uppercase tracking-widest">Lien copié ✓</p>
-                <button onClick={() => setShowInvite(false)} className="text-white/30 hover:text-white/60">
-                  <X size={16} />
+                <button onClick={() => setShowInvite(false)}>
+                  <X size={14} className="text-white/30" />
                 </button>
               </div>
-              <p className="text-white/60 text-xs font-mono break-all leading-relaxed">{inviteLink}</p>
+              <p className="text-white/50 text-xs font-mono break-all">{inviteLink}</p>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Chat overlay */}
+        {/* Chat */}
         <AnimatePresence>
           {showChat && (
             <motion.div
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -10 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
               className="absolute bottom-20 left-0 right-0 h-52 z-10"
             >
               <ChatPanel messages={messages} onSend={sendMessage} profile={profile} />
@@ -267,41 +277,33 @@ export default function LiveClient({ session, profile, domina }: Props) {
                 onClick={toggleMic}
                 disabled={!joined}
                 className={`w-12 h-12 rounded-full flex items-center justify-center transition-all disabled:opacity-20 ${
-                  micMuted
-                    ? 'bg-red-900/40 border border-red-700/40'
-                    : 'bg-white/8 border border-white/8'
+                  micMuted ? 'bg-red-900/40 border border-red-700/40' : 'bg-white/8 border border-white/8'
                 }`}
               >
-                {micMuted
-                  ? <MicOff size={19} className="text-red-400" />
-                  : <Mic size={19} className="text-white/70" />}
+                {micMuted ? <MicOff size={19} className="text-red-400" /> : <Mic size={19} className="text-white/70" />}
               </motion.button>
               <motion.button
                 whileTap={{ scale: 0.9 }}
                 onClick={toggleCam}
                 disabled={!joined}
                 className={`w-12 h-12 rounded-full flex items-center justify-center transition-all disabled:opacity-20 ${
-                  camOff
-                    ? 'bg-red-900/40 border border-red-700/40'
-                    : 'bg-white/8 border border-white/8'
+                  camOff ? 'bg-red-900/40 border border-red-700/40' : 'bg-white/8 border border-white/8'
                 }`}
               >
-                {camOff
-                  ? <VideoOff size={19} className="text-red-400" />
-                  : <Video size={19} className="text-white/70" />}
+                {camOff ? <VideoOff size={19} className="text-red-400" /> : <Video size={19} className="text-white/70" />}
+              </motion.button>
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                onClick={() => setShowWallet(w => !w)}
+                className="w-12 h-12 rounded-full glass border border-yellow-700/20 flex items-center justify-center text-yellow-600/60 hover:text-yellow-500 transition-colors"
+              >
+                <span className="text-lg">🪙</span>
               </motion.button>
             </div>
             <motion.button
               whileTap={{ scale: 0.9 }}
-              onClick={() => setShowWallet(w => !w)}
-              className="w-12 h-12 rounded-full glass border border-yellow-700/20 flex items-center justify-center text-yellow-600/60 hover:text-yellow-500 transition-colors"
-            >
-              <span className="text-lg">🪙</span>
-            </motion.button>
-            <motion.button
-              whileTap={{ scale: 0.9 }}
               onClick={endLive}
-              className="w-12 h-12 rounded-full bg-red-700 hover:bg-red-600 glow-red-sm flex items-center justify-center transition-all"
+              className="w-12 h-12 rounded-full bg-red-700 hover:bg-red-600 glow-red-sm flex items-center justify-center"
             >
               <PhoneOff size={19} className="text-white" />
             </motion.button>
@@ -309,7 +311,12 @@ export default function LiveClient({ session, profile, domina }: Props) {
         ) : (
           <div className="flex items-center justify-around gap-2">
             {[10, 50, 100, 500].map(amount => (
-              <CoinButton key={amount} amount={amount} onSend={handleSendCoins} disabled={balance < amount} />
+              <CoinButton
+                key={amount}
+                amount={amount}
+                onSend={handleSendCoins}
+                disabled={balance < amount}
+              />
             ))}
             <motion.button
               whileTap={{ scale: 0.9 }}
@@ -321,12 +328,29 @@ export default function LiveClient({ session, profile, domina }: Props) {
           </div>
         )}
       </div>
+
+      {/* Overlays */}
       <AnimatePresence>
         {showWallet && isDomina && (
           <WalletOverlay
             profileId={profile.id}
             sessionId={session.id}
             onClose={() => setShowWallet(false)}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showDuo && (
+          <DuoInviteModal
+            sessionId={session.id}
+            dominaId={profile.id}
+            onClose={() => setShowDuo(false)}
+            onInvited={(username) => {
+              setDuoUsername(username);
+              setShowDuo(false);
+              setIsDuoMode(true);
+            }}
           />
         )}
       </AnimatePresence>

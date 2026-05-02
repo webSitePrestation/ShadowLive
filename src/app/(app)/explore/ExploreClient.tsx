@@ -2,11 +2,13 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Radio, LogOut, Users, Coins, Crown } from 'lucide-react';
+import { Radio, LogOut, Users, Coins, Crown, UserCircle } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import Avatar from '@/components/ui/Avatar';
 import Badge from '@/components/ui/Badge';
+import InviteToast from '@/components/live/InviteToast';
+import { useInviteNotification } from '@/hooks/useInviteNotification';
 import type { Profile, LiveSession } from '@/types';
 
 interface SessionWithDomina extends LiveSession {
@@ -23,6 +25,7 @@ export default function ExploreClient({ profile, sessions: initialSessions }: Pr
   const [balance, setBalance] = useState(profile.coins_balance);
   const router = useRouter();
   const supabase = createClient();
+  const { invite, dismissInvite } = useInviteNotification(profile.id);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -52,6 +55,7 @@ export default function ExploreClient({ profile, sessions: initialSessions }: Pr
 
   return (
     <div className="min-h-screen bg-[#080808]">
+      <InviteToast invite={invite} onDismiss={dismissInvite} />
       {/* Header */}
       <div className="sticky top-0 z-10 glass border-b border-white/5 px-5 py-4">
         <div className="flex items-center justify-between max-w-lg mx-auto">
@@ -64,6 +68,12 @@ export default function ExploreClient({ profile, sessions: initialSessions }: Pr
               <span className="text-sm">🪙</span>
               <span className="text-yellow-500 text-sm font-bold">{balance.toLocaleString()}</span>
             </div>
+            <button
+              onClick={() => router.push('/profile')}
+              className="text-white/30 hover:text-white/70 transition-colors p-1"
+            >
+              <UserCircle size={18} />
+            </button>
             <button
               onClick={handleSignOut}
               className="text-white/30 hover:text-white/70 transition-colors p-1"
