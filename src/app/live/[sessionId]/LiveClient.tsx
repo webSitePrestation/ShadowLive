@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { accessTokenExpiresAtIso } from '@/lib/access-token';
 import { useDuoStream } from '@/hooks/useDuoStream';
 import { useChat } from '@/hooks/useChat';
 import { useCoins } from '@/hooks/useCoins';
@@ -18,6 +19,10 @@ import CoinButton from '@/components/live/CoinButton';
 import CoinRain from '@/components/live/CoinRain';
 import WalletOverlay from '@/components/live/WalletOverlay';
 import DuoInviteModal from '@/components/live/DuoInviteModal';
+import DuoRequestToast from '@/components/live/DuoRequestToast';
+import InviteToast from '@/components/live/InviteToast';
+import { useInviteNotification } from '@/hooks/useInviteNotification';
+import { useDuoRequest } from '@/hooks/useDuoRequest';
 import Badge from '@/components/ui/Badge';
 import type { LiveSession, Profile } from '@/types';
 
@@ -36,8 +41,9 @@ export default function LiveClient({ session, profile, domina }: Props) {
   const [isLive, setIsLive] = useState(session.status === 'LIVE');
   const [starting, setStarting] = useState(false);
   const [agoraReady, setAgoraReady] = useState(false);
-  const [isDuoMode, setIsDuoMode] = useState(false);
+  const [guestSoumisId, setGuestSoumisId] = useState<string | null>(session.guest_soumis_id);
   const [duoUsername, setDuoUsername] = useState('');
+  const [showDuoBanner, setShowDuoBanner] = useState(false);
   const [showChat, setShowChat] = useState(true);
   const [showWallet, setShowWallet] = useState(false);
   const [showDuo, setShowDuo] = useState(false);
@@ -45,6 +51,24 @@ export default function LiveClient({ session, profile, domina }: Props) {
   const [inviteLink, setInviteLink] = useState('');
   const [coinRainTrigger, setCoinRainTrigger] = useState(0);
   const [lastCoinAmount, setLastCoinAmount] = useState(0);
+  const [soumisIdsInLive, setSoumisIdsInLive] = useState<string[]>([]);
+  const [duoDominaToastName, setDuoDominaToastName] = useState<string | null>(null);
+
+  const {
+    pendingRequest,
+    acceptRequest,
+    declineRequest,
+    sendDuoRequest,
+    dominaAcceptedSoumisId,
+    clearDominaAccepted,
+  } = useDuoRequest({
+    sessionId: session.id,
+    profileId: profile.id,
+    isDomina,
+  });
+
+  const isDuoGuest = Boolean(guestSoumisId && profile.id === guestSoumisId);
+  const agoraRole = isDomina || isDuoGuest ? 'host' : 'audience';
 
   const {
     localVideoTrack, remoteUsers, joined,
@@ -53,9 +77,14 @@ export default function LiveClient({ session, profile, domina }: Props) {
   } = useDuoStream({
     channelName: session.agora_channel,
     uid: uidRef.current,
-    role: isDomina ? 'host' : 'audience',
+    role: agoraRole,
     enabled: agoraReady,
   });
+
+  const isDuoMode = Boolean(guestSoumisId) && joined && (isDomina || isDuoGuest);
+
+  const { invite: duoInviteToast, dismissInvite: dismissDuoInviteToast } =
+    useInviteNotification(profile.id);
 
   const viewerCount = useViewerCount(session.id, session.viewer_count, isLive);
   const { messages, sendMessage } = useChat(session.id, profile);
@@ -85,21 +114,113 @@ export default function LiveClient({ session, profile, domina }: Props) {
     if (!isDomina && session.status === 'LIVE') setAgoraReady(true);
   }, [isDomina, session.status]);
 
-  // Détecte quand un soumis rejoint en Duo
   useEffect(() => {
-    if (remoteUsers.length >= 1 && isDomina) {
-      setIsDuoMode(true);
-    } else if (remoteUsers.length === 0) {
-      setIsDuoMode(false);
+    const ch = supabase
+      .channel(`live-session:${session.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'live_sessions',
+          filter: `id=eq.${session.id}`,
+        },
+        (payload) => {
+          const next = payload.new as LiveSession;
+          if (next.guest_soumis_id !== undefined) {
+            setGuestSoumisId(next.guest_soumis_id);
+          }
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [session.id]);
+
+  useEffect(() => {
+    if (isDuoGuest && guestSoumisId) {
+      setShowDuoBanner(true);
     }
-  }, [remoteUsers, isDomina]);
+  }, [isDuoGuest, guestSoumisId]);
+
+  useEffect(() => {
+    if (!isDomina || !guestSoumisId) return;
+    void supabase
+      .from('profiles')
+      .select('username')
+      .eq('id', guestSoumisId)
+      .single()
+      .then(({ data }) => {
+        if (data?.username) setDuoUsername(data.username);
+      });
+  }, [isDomina, guestSoumisId]);
+
+  useEffect(() => {
+    if (!isLive) {
+      setSoumisIdsInLive([]);
+      return;
+    }
+    const ch = supabase.channel(`live-show:${session.id}`, {
+      config: { presence: { key: profile.id } },
+    });
+    const syncPresence = () => {
+      const state = ch.presenceState();
+      setSoumisIdsInLive(Object.keys(state).filter((id) => id !== session.domina_id));
+    };
+    ch.on('presence', { event: 'sync' }, syncPresence)
+      .on('presence', { event: 'join' }, syncPresence)
+      .on('presence', { event: 'leave' }, syncPresence)
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await ch.track({ watching: true });
+        }
+      });
+    return () => {
+      void supabase.removeChannel(ch);
+    };
+  }, [isLive, session.id, session.domina_id, profile.id]);
+
+  useEffect(() => {
+    if (!isDomina || !dominaAcceptedSoumisId) return;
+    const sid = dominaAcceptedSoumisId;
+    clearDominaAccepted();
+    void supabase
+      .from('profiles')
+      .select('username')
+      .eq('id', sid)
+      .single()
+      .then(({ data }) => {
+        setDuoDominaToastName(data?.username ?? 'Soumis');
+      });
+  }, [isDomina, dominaAcceptedSoumisId, clearDominaAccepted]);
+
+  useEffect(() => {
+    if (!duoDominaToastName || !isDomina) return;
+    const t = window.setTimeout(() => setDuoDominaToastName(null), 3000);
+    return () => window.clearTimeout(t);
+  }, [duoDominaToastName, isDomina]);
+
+  const handleAcceptDuoRequest = useCallback(async () => {
+    const res = await acceptRequest();
+    if (res && 'error' in res && res.error) {
+      alert(res.error);
+      return;
+    }
+    setAgoraReady(true);
+    setShowDuoBanner(true);
+  }, [acceptRequest]);
 
   const endLive = useCallback(async () => {
     await leave();
     if (isDomina) {
       await supabase
         .from('live_sessions')
-        .update({ status: 'ENDED', ended_at: new Date().toISOString() })
+        .update({
+          status: 'ENDED',
+          ended_at: new Date().toISOString(),
+          guest_soumis_id: null,
+        })
         .eq('id', session.id);
     }
     router.push('/dashboard');
@@ -108,7 +229,12 @@ export default function LiveClient({ session, profile, domina }: Props) {
   const generateInvite = useCallback(async () => {
     const { data } = await supabase
       .from('access_tokens')
-      .insert({ session_id: session.id, created_by: profile.id, role: 'SOUMIS' })
+      .insert({
+        session_id: session.id,
+        created_by: profile.id,
+        role: 'SOUMIS',
+        expires_at: accessTokenExpiresAtIso(),
+      })
       .select()
       .single();
 
@@ -130,10 +256,11 @@ export default function LiveClient({ session, profile, domina }: Props) {
     return success;
   }, [sendCoins, sendMessage]);
 
-  const isSoumisInDuo = !isDomina && remoteUsers.length > 0;
-
   return (
     <div className="fixed inset-0 bg-black flex flex-col overflow-hidden">
+      {profile.role === 'SOUMIS' && (
+        <InviteToast invite={duoInviteToast} onDismiss={dismissDuoInviteToast} />
+      )}
       <CoinRain trigger={coinRainTrigger} amount={lastCoinAmount} />
 
       {/* Video */}
@@ -143,8 +270,14 @@ export default function LiveClient({ session, profile, domina }: Props) {
           remoteUsers={remoteUsers}
           isDomina={isDomina}
           dominaName={domina?.username ?? 'Domina'}
-          soumisName={duoUsername || undefined}
-          isDuoMode={isDuoMode || isSoumisInDuo}
+          soumisName={
+            isDomina
+              ? duoUsername || undefined
+              : isDuoGuest
+                ? profile.username
+                : undefined
+          }
+          isDuoMode={isDuoMode}
         />
 
         {/* Gradients */}
@@ -166,8 +299,13 @@ export default function LiveClient({ session, profile, domina }: Props) {
               <Users size={10} />
               {viewerCount}
             </span>
-            {isDuoMode && (
+            {guestSoumisId && (
               <Badge variant="gold">⚡ DUO</Badge>
+            )}
+            {!isDomina && isDuoGuest && localVideoTrack && !camOff && (
+              <Badge variant="gold" className="border border-yellow-500/40 bg-yellow-950/40">
+                🎬 EN DUO
+              </Badge>
             )}
           </div>
 
@@ -233,6 +371,69 @@ export default function LiveClient({ session, profile, domina }: Props) {
             </motion.div>
           )}
         </AnimatePresence>
+
+        <AnimatePresence>
+          {showDuoBanner && isDuoGuest && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 12 }}
+              className="absolute top-14 inset-x-4 z-30 surface-luxury rounded-xl p-3 border border-yellow-700/25"
+            >
+              <p className="text-yellow-500/90 text-xs font-semibold uppercase tracking-widest">Mode duo</p>
+              <p className="text-white/80 text-sm mt-1">
+                Ta caméra et ton micro sont partagés avec {domina?.username ?? 'la Domina'}.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowDuoBanner(false)}
+                className="text-white/40 text-xs mt-2 hover:text-white/70"
+              >
+                OK
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {guestSoumisId && isDomina && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="absolute bottom-36 left-4 right-4 z-20 surface-dark rounded-xl px-3 py-2 border border-yellow-700/20"
+            >
+              <p className="text-yellow-500/80 text-[10px] uppercase tracking-widest">Soumis en duo</p>
+              <p className="text-white text-sm font-medium">{duoUsername || 'Connecté'}</p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {duoDominaToastName && isDomina && (
+            <motion.div
+              initial={{ opacity: 0, y: -16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ type: 'spring', damping: 24, stiffness: 320 }}
+              className="fixed top-4 inset-x-4 z-[55] max-w-lg mx-auto rounded-2xl px-4 py-3 border border-yellow-500/45 shadow-xl"
+              style={{
+                background:
+                  'linear-gradient(135deg, rgba(28,24,8,0.98) 0%, rgba(6,6,8,0.99) 55%, rgba(12,10,6,0.98) 100%)',
+              }}
+            >
+              <p className="text-yellow-200/95 text-sm font-semibold text-center tracking-tight">
+                ⚡ {duoDominaToastName} a rejoint le Duo
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <DuoRequestToast
+          visible={Boolean(!isDomina && pendingRequest && isLive)}
+          onAccept={() => void handleAcceptDuoRequest()}
+          onDecline={() => void declineRequest()}
+        />
 
         {/* Bouton démarrer */}
         {isDomina && !isLive && (
@@ -308,6 +509,49 @@ export default function LiveClient({ session, profile, domina }: Props) {
               <PhoneOff size={19} className="text-white" />
             </motion.button>
           </div>
+        ) : isDuoGuest ? (
+          <div className="flex items-center justify-between gap-1.5 min-h-[52px]">
+            <div className="flex items-center gap-1.5 shrink-0">
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                onClick={toggleMic}
+                disabled={!joined}
+                className={`w-10 h-10 rounded-full flex items-center justify-center transition-all disabled:opacity-20 ${
+                  micMuted ? 'bg-red-900/40 border border-red-700/40' : 'bg-white/8 border border-white/8'
+                }`}
+              >
+                {micMuted ? <MicOff size={16} className="text-red-400" /> : <Mic size={16} className="text-white/70" />}
+              </motion.button>
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                onClick={toggleCam}
+                disabled={!joined}
+                className={`w-10 h-10 rounded-full flex items-center justify-center transition-all disabled:opacity-20 ${
+                  camOff ? 'bg-red-900/40 border border-red-700/40' : 'bg-white/8 border border-white/8'
+                }`}
+              >
+                {camOff ? <VideoOff size={16} className="text-red-400" /> : <Video size={16} className="text-white/70" />}
+              </motion.button>
+            </div>
+            <div className="flex items-center justify-center gap-0.5 flex-1 min-w-0 overflow-x-auto px-0.5">
+              {[10, 50, 100, 500].map(amount => (
+                <CoinButton
+                  key={amount}
+                  amount={amount}
+                  onSend={handleSendCoins}
+                  disabled={balance < amount}
+                  compact
+                />
+              ))}
+            </div>
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              onClick={endLive}
+              className="w-10 h-10 rounded-full bg-white/5 border border-white/8 flex items-center justify-center shrink-0"
+            >
+              <PhoneOff size={16} className="text-white/30" />
+            </motion.button>
+          </div>
         ) : (
           <div className="flex items-center justify-around gap-2">
             {[10, 50, 100, 500].map(amount => (
@@ -344,12 +588,19 @@ export default function LiveClient({ session, profile, domina }: Props) {
         {showDuo && (
           <DuoInviteModal
             sessionId={session.id}
+            sessionTitle={session.title}
+            dominaDisplayName={domina?.username ?? 'Domina'}
             dominaId={profile.id}
+            soumisIdsInLive={soumisIdsInLive}
+            sendDuoRequest={sendDuoRequest}
             onClose={() => setShowDuo(false)}
-            onInvited={(username) => {
+            onInvited={(username, mode, link) => {
               setDuoUsername(username);
               setShowDuo(false);
-              setIsDuoMode(true);
+              if (mode === 'link' && link) {
+                setInviteLink(link);
+                setShowInvite(true);
+              }
             }}
           />
         )}

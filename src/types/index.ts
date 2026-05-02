@@ -50,6 +50,17 @@ export interface CoinTransaction {
   created_at: string;
 }
 
+export type DuoRequestStatus = 'PENDING' | 'ACCEPTED' | 'DECLINED';
+
+export interface DuoRequest {
+  id: string;
+  session_id: string;
+  domina_id: string;
+  soumis_id: string;
+  status: DuoRequestStatus;
+  created_at: string;
+}
+
 export interface AccessToken {
   id: string;
   session_id: string;
@@ -57,6 +68,6 @@ export interface AccessToken {
   token: string;
   role: TokenRole;
   used: boolean;
-  expires_at: string;
+  expires_at: string | null;
   created_at: string;
 }

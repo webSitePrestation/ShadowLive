@@ -15,33 +15,26 @@ export function useInviteNotification(profileId: string) {
   const supabase = createClient();
 
   useEffect(() => {
+    const channelName = `invite-notify:${profileId}`;
     const channel = supabase
-      .channel(`invites:${profileId}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'access_tokens',
-      }, async (payload) => {
-        const token = payload.new;
-
-        const { data: session } = await supabase
-          .from('live_sessions')
-          .select('id, title, profiles!live_sessions_domina_id_fkey(username)')
-          .eq('id', token.session_id)
-          .single();
-
-        if (session) {
+      .channel(channelName)
+      .on('broadcast', { event: 'duo_invite' }, (msg) => {
+        const raw = (msg as { payload?: Partial<Invite> }).payload ?? (msg as Partial<Invite>);
+        const p = raw as Partial<Invite>;
+        if (p?.token && p?.sessionId) {
           setInvite({
-            token: token.token,
-            sessionId: session.id,
-            sessionTitle: session.title,
-            dominaName: (session.profiles as any)?.username ?? 'Domina',
+            token: String(p.token).trim(),
+            sessionId: String(p.sessionId),
+            sessionTitle: p.sessionTitle ?? 'Live',
+            dominaName: p.dominaName ?? 'Domina',
           });
         }
       })
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [profileId]);
 
   const dismissInvite = () => setInvite(null);

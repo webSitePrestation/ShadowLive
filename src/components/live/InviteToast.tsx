@@ -19,7 +19,7 @@ export default function InviteToast({ invite, onDismiss }: Props) {
   const handleAccept = () => {
     if (!invite) return;
     onDismiss();
-    router.push(`/join/${invite.token}`);
+    router.push(`/join/${encodeURIComponent(invite.token)}`);
   };
 
   return (

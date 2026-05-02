@@ -1,10 +1,10 @@
 'use client';
 
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import VideoStage from './VideoStage';
-import type { ICameraVideoTrack, IRemoteVideoTrack } from '@/lib/agora/client';
+import type { ICameraVideoTrack } from '@/lib/agora/client';
 import type { DuoUser } from '@/hooks/useDuoStream';
-import { Crown, User } from 'lucide-react';
+import { Crown, Loader2 } from 'lucide-react';
 
 interface Props {
   localVideoTrack: ICameraVideoTrack | null;
@@ -12,7 +12,20 @@ interface Props {
   isDomina: boolean;
   dominaName: string;
   soumisName?: string;
+  /** Split vertical : duo confirmé + Agora prêt (vidéo distante peut arriver après) */
   isDuoMode: boolean;
+}
+
+function CameraConnectingBlock({ label }: { label?: string }) {
+  return (
+    <div className="w-full h-full flex flex-col items-center justify-center bg-[#08080a] gap-3 px-4">
+      <Loader2 className="w-9 h-9 text-yellow-600/75 animate-spin" strokeWidth={2} />
+      <p className="text-white/40 text-xs text-center">Connexion caméra...</p>
+      {label ? (
+        <p className="text-white/30 text-[11px] font-medium text-center">{label}</p>
+      ) : null}
+    </div>
+  );
 }
 
 export default function DuoStage({
@@ -24,9 +37,8 @@ export default function DuoStage({
   isDuoMode,
 }: Props) {
   const remoteVideoTrack = remoteUsers[0]?.videoTrack;
-  const hasDuo = isDuoMode && remoteVideoTrack;
 
-  if (!isDuoMode || !hasDuo) {
+  if (!isDuoMode) {
     return (
       <div className="w-full h-full relative">
         {isDomina && localVideoTrack ? (
@@ -34,12 +46,12 @@ export default function DuoStage({
         ) : remoteVideoTrack ? (
           <VideoStage track={remoteVideoTrack} className="w-full h-full" />
         ) : (
-          <div className="w-full h-full flex items-center justify-center bg-[#080808]">
+          <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-[#080808] px-6">
             <Crown size={48} className="text-red-700/30" />
+            <p className="text-white/25 text-xs text-center">{dominaName}</p>
           </div>
         )}
 
-        {/* Nom Domina */}
         <div className="absolute bottom-4 left-4">
           <div className="flex items-center gap-2 glass rounded-full px-3 py-1.5">
             <Crown size={10} className="text-yellow-600/60" />
@@ -56,11 +68,12 @@ export default function DuoStage({
       <div className="flex-1 relative border-b border-white/10">
         {isDomina && localVideoTrack ? (
           <VideoStage track={localVideoTrack} className="w-full h-full" mirror />
-        ) : remoteUsers[1]?.videoTrack ? (
-          <VideoStage track={remoteUsers[1].videoTrack} className="w-full h-full" />
+        ) : remoteVideoTrack ? (
+          <VideoStage track={remoteVideoTrack} className="w-full h-full" />
         ) : (
-          <div className="w-full h-full flex items-center justify-center bg-[#0a0808]">
+          <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-[#0a0808] px-4">
             <Crown size={32} className="text-red-700/30" />
+            <p className="text-white/30 text-xs text-center">{dominaName}</p>
           </div>
         )}
         <div className="absolute bottom-2 left-3">
@@ -74,23 +87,30 @@ export default function DuoStage({
       <div className="flex-1 relative">
         {isDomina ? (
           remoteVideoTrack ? (
-            <VideoStage track={remoteVideoTrack} className="w-full h-full" />
+            <motion.div
+              key="domina-remote-soumis"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+              className="w-full h-full"
+            >
+              <VideoStage track={remoteVideoTrack} className="w-full h-full" />
+            </motion.div>
           ) : (
-            <div className="w-full h-full flex items-center justify-center bg-[#08080a]">
-              <div className="text-center space-y-2">
-                <User size={32} className="mx-auto text-white/10" />
-                <p className="text-white/20 text-xs">En attente du soumis...</p>
-              </div>
-            </div>
+            <CameraConnectingBlock label={soumisName ?? 'Soumis'} />
           )
-        ) : (
-          localVideoTrack ? (
+        ) : localVideoTrack ? (
+          <motion.div
+            key="soumis-local"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+            className="w-full h-full"
+          >
             <VideoStage track={localVideoTrack} className="w-full h-full" mirror />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center bg-[#08080a]">
-              <User size={32} className="text-white/10" />
-            </div>
-          )
+          </motion.div>
+        ) : (
+          <CameraConnectingBlock label={soumisName ?? 'Toi'} />
         )}
         <div className="absolute bottom-2 left-3">
           <div className="flex items-center gap-1.5 glass rounded-full px-2.5 py-1">
@@ -100,7 +120,6 @@ export default function DuoStage({
         </div>
       </div>
 
-      {/* Séparateur central */}
       <div className="absolute inset-x-0 top-1/2 -translate-y-px h-px bg-gradient-to-r from-transparent via-red-800/40 to-transparent pointer-events-none" />
     </div>
   );

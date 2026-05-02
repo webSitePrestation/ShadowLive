@@ -7,8 +7,6 @@ import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import Avatar from '@/components/ui/Avatar';
 import Badge from '@/components/ui/Badge';
-import InviteToast from '@/components/live/InviteToast';
-import { useInviteNotification } from '@/hooks/useInviteNotification';
 import type { Profile, LiveSession } from '@/types';
 
 interface SessionWithDomina extends LiveSession {
@@ -25,7 +23,6 @@ export default function ExploreClient({ profile, sessions: initialSessions }: Pr
   const [balance, setBalance] = useState(profile.coins_balance);
   const router = useRouter();
   const supabase = createClient();
-  const { invite, dismissInvite } = useInviteNotification(profile.id);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -55,7 +52,6 @@ export default function ExploreClient({ profile, sessions: initialSessions }: Pr
 
   return (
     <div className="min-h-screen bg-[#080808]">
-      <InviteToast invite={invite} onDismiss={dismissInvite} />
       {/* Header */}
       <div className="sticky top-0 z-10 glass border-b border-white/5 px-5 py-4">
         <div className="flex items-center justify-between max-w-lg mx-auto">

@@ -16,7 +16,11 @@ function LoginForm() {
   const [error, setError] = useState('');
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectTo = searchParams.get('redirect') ?? '/dashboard';
+  const rawRedirect = searchParams.get('redirect') ?? '/dashboard';
+  const redirectTo =
+    rawRedirect.startsWith('/') && !rawRedirect.startsWith('//')
+      ? rawRedirect
+      : '/dashboard';
   const supabase = createClient();
 
   const handlePasswordLogin = async () => {

@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { createAgoraClient, createLocalTracks } from '@/lib/agora/client';
+import {
+  createAgoraClient,
+  createLocalAudioTrack,
+  createLocalVideoTrack,
+} from '@/lib/agora/client';
 import type {
   IAgoraRTCClient,
   ICameraVideoTrack,
@@ -24,6 +28,41 @@ interface UseDuoStreamOptions {
   enabled: boolean;
 }
 
+async function canOpenMedia(constraints: MediaStreamConstraints): Promise<boolean> {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    stream.getTracks().forEach((track) => track.stop());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getReadableAgoraError(err: unknown): string {
+  const unknownMessage = 'Impossible de rejoindre le live.';
+  if (!(err instanceof Error)) return unknownMessage;
+  const code = (err as Error & { code?: string }).code;
+  const message = err.message ?? '';
+
+  if (code === 'DEVICE_NOT_FOUND' || message.includes('DEVICE_NOT_FOUND')) {
+    return 'Aucune camera/micro detecte(e). Branche un appareil et autorise l acces navigateur.';
+  }
+  if (code === 'NOT_ALLOWED' || message.includes('NotAllowedError')) {
+    return 'Acces camera/micro refuse. Autorise les permissions du site puis reessaie.';
+  }
+  if (code === 'WEB_SECURITY_RESTRICT' || message.includes('WEB_SECURITY_RESTRICT')) {
+    return 'Contexte non securise. Utilise https ou localhost pour activer camera/micro.';
+  }
+  return message || unknownMessage;
+}
+
+function isMediaCaptureAllowedInThisContext(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  const isLocalhost = host === 'localhost' || host === '127.0.0.1';
+  return window.isSecureContext || isLocalhost;
+}
+
 export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOptions) {
   const clientRef = useRef<IAgoraRTCClient | null>(null);
   const [localVideoTrack, setLocalVideoTrack] = useState<ICameraVideoTrack | null>(null);
@@ -41,6 +80,12 @@ export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOp
       body: JSON.stringify({ channelName, uid, role }),
     });
     const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data?.error ?? 'Token API error');
+    }
+    if (!data?.token || !data?.appId) {
+      throw new Error('Agora token response is invalid');
+    }
     return { token: data.token as string, appId: data.appId as string };
   }, [channelName, uid, role]);
 
@@ -48,6 +93,13 @@ export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOp
     if (clientRef.current || !enabled) return;
 
     try {
+      const insecureHostContext = role === 'host' && !isMediaCaptureAllowedInThisContext();
+      if (insecureHostContext) {
+        setJoined(false);
+        setError(null);
+        return;
+      }
+
       const client = await createAgoraClient();
       clientRef.current = client;
 
@@ -56,12 +108,7 @@ export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOp
       const { token, appId } = await getToken();
       await client.join(appId, channelName, token, uid);
 
-      if (role === 'host') {
-        const [audioTrack, videoTrack] = await createLocalTracks();
-        await client.publish([audioTrack, videoTrack]);
-        setLocalAudioTrack(audioTrack);
-        setLocalVideoTrack(videoTrack);
-      }
+      setJoined(true);
 
       client.on('user-published', async (user, mediaType) => {
         await client.subscribe(user, mediaType);
@@ -84,6 +131,53 @@ export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOp
         if (mediaType === 'audio') user.audioTrack?.play();
       });
 
+      if (role === 'host') {
+        try {
+          let audioTrack: IMicrophoneAudioTrack | null = null;
+          let videoTrack: ICameraVideoTrack | null = null;
+
+          const audioAvailable = await canOpenMedia({ audio: true, video: false });
+          const videoAvailable = await canOpenMedia({ audio: false, video: true });
+
+          if (audioAvailable) {
+            try {
+              audioTrack = await createLocalAudioTrack();
+            } catch (audioErr) {
+              console.warn('[Duo] Agora audio track unavailable:', audioErr);
+            }
+          }
+
+          if (videoAvailable) {
+            try {
+              videoTrack = await createLocalVideoTrack();
+            } catch (videoErr) {
+              console.warn('[Duo] Agora video track unavailable:', videoErr);
+            }
+          }
+
+          const tracksToPublish = [audioTrack, videoTrack].filter(Boolean) as (
+            IMicrophoneAudioTrack | ICameraVideoTrack
+          )[];
+          if (tracksToPublish.length > 0) {
+            await client.publish(tracksToPublish);
+          }
+
+          setLocalAudioTrack(audioTrack);
+          setLocalVideoTrack(videoTrack);
+
+          if (!audioTrack && !videoTrack) {
+            setError('Aucun micro/camera detecte. Live lance sans publication locale.');
+          } else if (!audioTrack || !videoTrack) {
+            setError('Micro ou camera indisponible. Live lance en mode degrade.');
+          } else {
+            setError(null);
+          }
+        } catch (deviceErr) {
+          console.error('[Duo] Agora device error:', deviceErr);
+          setError(getReadableAgoraError(deviceErr));
+        }
+      }
+
       client.on('user-unpublished', (user, mediaType) => {
         setRemoteUsers(prev => prev.map(u => u.uid === user.uid ? {
           ...u,
@@ -95,11 +189,9 @@ export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOp
       client.on('user-left', (user) => {
         setRemoteUsers(prev => prev.filter(u => u.uid !== user.uid));
       });
-
-      setJoined(true);
-    } catch (err: any) {
-      console.error('[Duo] Agora error:', err);
-      setError(err?.message ?? 'Erreur de connexion Agora');
+    } catch (err) {
+      console.error('[Duo] Agora join error:', err);
+      setError(getReadableAgoraError(err));
     }
   }, [channelName, uid, role, enabled, getToken]);
 
@@ -127,9 +219,17 @@ export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOp
   }, [localVideoTrack, camOff]);
 
   useEffect(() => {
-    if (enabled) join();
-    return () => { leave(); };
-  }, [enabled]);
+    if (!enabled) {
+      void leave();
+      return;
+    }
+    void join();
+    return () => {
+      void leave();
+    };
+    // role/channel/uid : reconnexion Agora quand le soumis passe en co-host (duo)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- leave/join volontairement exclus (tracks mutent leave)
+  }, [enabled, role, channelName, uid]);
 
   return {
     localVideoTrack,

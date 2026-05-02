@@ -7,9 +7,11 @@ interface Props {
   amount: number;
   onSend: (amount: number) => Promise<boolean>;
   disabled?: boolean;
+  /** Boutons plus petits (barre duo soumis) */
+  compact?: boolean;
 }
 
-export default function CoinButton({ amount, onSend, disabled }: Props) {
+export default function CoinButton({ amount, onSend, disabled, compact }: Props) {
   const [pressing, setPressing] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
 
@@ -46,17 +48,27 @@ export default function CoinButton({ amount, onSend, disabled }: Props) {
         whileTap={{ scale: 0.82 }}
         onClick={handlePress}
         disabled={disabled || pressing}
-        className={`flex flex-col items-center justify-center w-15 h-15 rounded-2xl transition-all
+        className={`flex flex-col items-center justify-center rounded-xl transition-all
           ${disabled
             ? 'bg-white/3 border border-white/5 opacity-30'
             : pressing
             ? 'bg-yellow-500/25 border border-yellow-500/50 glow-gold'
             : 'bg-yellow-900/20 border border-yellow-700/25 hover:bg-yellow-900/30 active:bg-yellow-500/20'
           }`}
-        style={{ width: 56, height: 56 }}
+        style={
+          compact
+            ? { width: 40, height: 40, minWidth: 40, minHeight: 40 }
+            : { width: 56, height: 56, minWidth: 56, minHeight: 56 }
+        }
       >
-        <span className="text-lg leading-none">🪙</span>
-        <span className="text-yellow-400 text-xs font-bold mt-0.5 leading-none">{amount}</span>
+        <span className={compact ? 'text-sm leading-none' : 'text-lg leading-none'}>🪙</span>
+        <span
+          className={`text-yellow-400 font-bold mt-0.5 leading-none ${
+            compact ? 'text-[10px]' : 'text-xs'
+          }`}
+        >
+          {amount}
+        </span>
       </motion.button>
     </div>
   );
