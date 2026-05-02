@@ -1,7 +1,15 @@
-import type { NextConfig } from "next";
+import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ['localhost', '127.0.0.1', '192.168.75.152', '*.trycloudflare.com'],
+  output: 'standalone',
+  images: {
+    remotePatterns: [
+      { protocol: 'https', hostname: '**.supabase.co' },
+    ],
+  },
+  experimental: {
+    serverActions: { allowedOrigins: ['localhost:3000'] },
+  },
 };
 
 export default nextConfig;

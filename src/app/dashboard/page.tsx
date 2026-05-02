@@ -1,8 +1,8 @@
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
-import DashboardClient from './DashboardClient';
+import DashboardClient from '../(app)/dashboard/DashboardClient';
 
-export default async function DashboardPage() {
+export default async function DashboardRouter() {
   const supabase = await createClient();
 
   const { data: { user } } = await supabase.auth.getUser();
@@ -15,6 +15,10 @@ export default async function DashboardPage() {
     .single();
 
   if (!profile) redirect('/login');
+
+  if (profile.role === 'SOUMIS') {
+    redirect('/explore');
+  }
 
   const { data: sessions } = await supabase
     .from('live_sessions')

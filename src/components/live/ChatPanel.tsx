@@ -13,8 +13,8 @@ interface Props {
 
 const roleColors: Record<string, string> = {
   DOMINA: 'text-red-400',
-  ADMIN: 'text-yellow-400',
-  SOUMIS: 'text-white/60',
+  ADMIN: 'text-yellow-500',
+  SOUMIS: 'text-white/50',
 };
 
 export default function ChatPanel({ messages, onSend, profile }: Props) {
@@ -34,26 +34,26 @@ export default function ChatPanel({ messages, onSend, profile }: Props) {
   return (
     <div className="flex flex-col h-full">
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1 scrollbar-hide">
+      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1.5 scrollbar-hide">
         <AnimatePresence initial={false}>
-          {messages.map(msg => (
+          {messages.slice(-30).map(msg => (
             <motion.div
               key={msg.id}
-              initial={{ opacity: 0, y: 8 }}
+              initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               className="text-sm leading-relaxed"
             >
               {msg.type === 'COIN_GIFT' ? (
-                <span className="text-yellow-400/80">
-                  🪙 <span className="font-semibold">{msg.content}</span>
+                <span className="inline-flex items-center gap-1 bg-yellow-900/30 border border-yellow-700/20 rounded-full px-2.5 py-0.5 text-yellow-400 text-xs">
+                  🪙 {msg.content}
                 </span>
               ) : (
-                <>
-                  <span className={`font-semibold mr-1 ${roleColors[profile.role] ?? 'text-white/60'}`}>
+                <span>
+                  <span className={`font-semibold mr-1.5 text-xs ${roleColors[profile.role] ?? 'text-white/50'}`}>
                     {profile.username}
                   </span>
-                  <span className="text-white/80">{msg.content}</span>
-                </>
+                  <span className="text-white/75 text-xs">{msg.content}</span>
+                </span>
               )}
             </motion.div>
           ))}
@@ -62,22 +62,23 @@ export default function ChatPanel({ messages, onSend, profile }: Props) {
       </div>
 
       {/* Input */}
-      <div className="flex items-center gap-2 px-3 py-2 border-t border-white/10">
+      <div className="flex items-center gap-2 px-3 py-2">
         <input
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && handleSend()}
           placeholder="Message..."
           maxLength={200}
-          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm placeholder-white/20 focus:outline-none focus:border-red-600/40 transition-colors"
+          className="flex-1 bg-black/60 border border-white/8 rounded-full px-4 py-2 text-white text-xs placeholder-white/20 focus:outline-none focus:border-red-700/40 transition-colors"
         />
-        <button
+        <motion.button
+          whileTap={{ scale: 0.85 }}
           onClick={handleSend}
           disabled={!input.trim()}
-          className="text-red-500 hover:text-red-400 disabled:opacity-30 transition-colors"
+          className="w-8 h-8 rounded-full bg-red-800/60 border border-red-700/30 flex items-center justify-center text-white/60 hover:text-white disabled:opacity-20 transition-colors shrink-0"
         >
-          <Send size={18} />
-        </button>
+          <Send size={13} />
+        </motion.button>
       </div>
     </div>
   );
