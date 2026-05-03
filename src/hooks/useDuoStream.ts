@@ -13,6 +13,7 @@ import type {
   IRemoteVideoTrack,
   IRemoteAudioTrack,
 } from '@/lib/agora/client';
+import type { IAgoraRTCRemoteUser } from 'agora-rtc-sdk-ng';
 
 export interface DuoUser {
   uid: string | number;
@@ -65,6 +66,7 @@ function isMediaCaptureAllowedInThisContext(): boolean {
 
 export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOptions) {
   const clientRef = useRef<IAgoraRTCClient | null>(null);
+  const remoteAgoraUsersRef = useRef<Map<string | number, IAgoraRTCRemoteUser>>(new Map());
   const [localVideoTrack, setLocalVideoTrack] = useState<ICameraVideoTrack | null>(null);
   const [localAudioTrack, setLocalAudioTrack] = useState<IMicrophoneAudioTrack | null>(null);
   const [remoteUsers, setRemoteUsers] = useState<DuoUser[]>([]);
@@ -102,6 +104,7 @@ export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOp
 
       const client = await createAgoraClient();
       clientRef.current = client;
+      remoteAgoraUsersRef.current.clear();
 
       await client.setClientRole(role === 'host' ? 'host' : 'audience');
 
@@ -110,8 +113,13 @@ export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOp
 
       setJoined(true);
 
+      client.on('user-joined', (user: IAgoraRTCRemoteUser) => {
+        remoteAgoraUsersRef.current.set(user.uid, user);
+      });
+
       client.on('user-published', async (user, mediaType) => {
         await client.subscribe(user, mediaType);
+        remoteAgoraUsersRef.current.set(user.uid, user);
         setRemoteUsers(prev => {
           const existing = prev.find(u => u.uid === user.uid);
           if (existing) {
@@ -187,6 +195,7 @@ export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOp
       });
 
       client.on('user-left', (user) => {
+        remoteAgoraUsersRef.current.delete(user.uid);
         setRemoteUsers(prev => prev.filter(u => u.uid !== user.uid));
       });
     } catch (err) {
@@ -198,6 +207,7 @@ export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOp
   const leave = useCallback(async () => {
     localAudioTrack?.close();
     localVideoTrack?.close();
+    remoteAgoraUsersRef.current.clear();
     await clientRef.current?.leave();
     clientRef.current = null;
     setLocalAudioTrack(null);
@@ -217,6 +227,69 @@ export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOp
     await localVideoTrack.setMuted(!camOff);
     setCamOff(c => !c);
   }, [localVideoTrack, camOff]);
+
+  /** Publie une piste vidéo locale si elle manquait (ex. soumis en duo après acceptation). */
+  const tryPublishVideo = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client || role !== 'host' || !joined) return;
+
+    if (localVideoTrack) {
+      if (camOff) {
+        await localVideoTrack.setMuted(false);
+        setCamOff(false);
+      }
+      return;
+    }
+
+    try {
+      if (!isMediaCaptureAllowedInThisContext()) {
+        setError('HTTPS ou localhost requis pour activer la camera.');
+        return;
+      }
+      const videoAvailable = await canOpenMedia({ audio: false, video: true });
+      if (!videoAvailable) {
+        setError('Camera inaccessible ou permission refusee.');
+        return;
+      }
+      const videoTrack = await createLocalVideoTrack();
+      await client.publish([videoTrack]);
+      setLocalVideoTrack(videoTrack);
+      setCamOff(false);
+      setError(null);
+    } catch (e) {
+      setError(getReadableAgoraError(e));
+    }
+  }, [role, joined, localVideoTrack, camOff]);
+
+  /** Désabonne la Domina des flux d’un remote (UID stable = profileIdToAgoraUid). */
+  const kickRemoteUid = useCallback(
+    async (targetUid: number) => {
+      const client = clientRef.current;
+      if (!client || !joined) return;
+      let user: IAgoraRTCRemoteUser | undefined = remoteAgoraUsersRef.current.get(targetUid);
+      if (!user) {
+        for (const [, u] of remoteAgoraUsersRef.current) {
+          if (Number(u.uid) === targetUid) {
+            user = u;
+            break;
+          }
+        }
+      }
+      if (!user) {
+        setRemoteUsers(prev => prev.filter(u => Number(u.uid) !== targetUid));
+        return;
+      }
+      try {
+        await client.unsubscribe(user, 'video').catch(() => {});
+        await client.unsubscribe(user, 'audio').catch(() => {});
+      } catch (e) {
+        console.warn('[Duo] kickRemoteUid', e);
+      }
+      remoteAgoraUsersRef.current.delete(user.uid);
+      setRemoteUsers(prev => prev.filter(u => String(u.uid) !== String(user.uid)));
+    },
+    [joined]
+  );
 
   useEffect(() => {
     if (!enabled) {
@@ -241,6 +314,8 @@ export function useDuoStream({ channelName, uid, role, enabled }: UseDuoStreamOp
     camOff,
     toggleMic,
     toggleCam,
+    tryPublishVideo,
+    kickRemoteUid,
     leave,
   };
 }

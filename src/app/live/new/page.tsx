@@ -1,5 +1,23 @@
 import { redirect } from 'next/navigation';
+import { createClient } from '@/lib/supabase/server';
 
-export default function NewLivePage() {
+export default async function NewLivePage() {
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('auth_user_id', user.id)
+    .single();
+
+  if (!profile || (profile.role !== 'DOMINA' && profile.role !== 'ADMIN')) {
+    redirect('/dashboard');
+  }
+
   redirect('/dashboard');
 }

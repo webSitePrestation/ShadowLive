@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Users, Crown, Shield, ChevronDown, Check, ArrowLeft, Coins } from 'lucide-react';
+import { Users, Crown, Shield, ChevronDown, Check, ArrowLeft, Coins, BarChart3 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import Avatar from '@/components/ui/Avatar';
@@ -91,20 +91,30 @@ export default function AdminClient({ currentAdmin, users }: Props) {
     <div className="min-h-screen bg-[#080808]">
       {/* Header */}
       <div className="sticky top-0 z-10 glass border-b border-white/5 px-5 py-4">
-        <div className="flex items-center justify-between max-w-lg mx-auto">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between max-w-lg mx-auto gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <button
+              type="button"
               onClick={() => router.push('/dashboard')}
-              className="text-white/30 hover:text-white/70 transition-colors"
+              className="text-white/30 hover:text-white/70 transition-colors shrink-0"
+              aria-label="Retour dashboard"
             >
               <ArrowLeft size={18} />
             </button>
-            <div>
-              <h1 className="text-sm font-bold tracking-widest text-white/80 uppercase">Panel Admin</h1>
-              <p className="text-xs text-yellow-600/60 tracking-wider">ShadowLive</p>
+            <button
+              type="button"
+              onClick={() => router.push('/admin/stats')}
+              className="shrink-0 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-yellow-900/15 border border-yellow-700/25 text-yellow-600/90 hover:text-yellow-500 hover:border-yellow-600/40 transition-colors text-[9px] font-bold uppercase tracking-wide max-w-[7.5rem] leading-tight text-left"
+            >
+              <BarChart3 size={14} className="shrink-0" />
+              Voir les stats globales
+            </button>
+            <div className="min-w-0">
+              <h1 className="text-sm font-bold tracking-widest text-white/80 uppercase truncate">Panel Admin</h1>
+              <p className="text-xs text-yellow-600/60 tracking-wider truncate">ShadowLive</p>
             </div>
           </div>
-          <Badge variant="gold">
+          <Badge variant="gold" className="shrink-0">
             <Crown size={10} />
             {currentAdmin.username}
           </Badge>

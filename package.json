@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "tunnel": "./.tools/cloudflared tunnel --url http://127.0.0.1:3000",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -21,6 +22,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "tailwind-merge": "^3.5.0",
+    "web-push": "^3.6.7",
     "zod": "^4.4.1",
     "zustand": "^5.0.12"
   },
@@ -29,6 +31,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/web-push": "^3.6.4",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "supabase": "^2.96.0",

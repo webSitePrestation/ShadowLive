@@ -6,16 +6,26 @@ import { X, Search, Link2, Video, Check } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { accessTokenExpiresAtIso } from '@/lib/access-token';
 import Avatar from '@/components/ui/Avatar';
-import type { Profile } from '@/types';
+import Badge from '@/components/ui/Badge';
+import type { Profile, UserRole } from '@/types';
+
+function roleBadgeVariant(role: UserRole): 'red' | 'gold' | 'ghost' {
+  if (role === 'ADMIN') return 'gold';
+  if (role === 'DOMINA') return 'red';
+  return 'ghost';
+}
 
 interface Props {
   sessionId: string;
   sessionTitle: string;
   dominaDisplayName: string;
   dominaId: string;
-  /** Profils présents sur la page du live (Presence) — pour afficher « Inviter en Duo » */
+  /** Profils détectés sur la page du live (Presence) — pastille « Sur ce live » uniquement */
   soumisIdsInLive: string[];
-  sendDuoRequest: (soumisId: string) => Promise<{ error?: string }>;
+  sendDuoRequest: (
+    soumisId: string,
+    ctx: { sessionTitle: string; dominaDisplayName: string }
+  ) => Promise<{ error?: string }>;
   onClose: () => void;
   onInvited: (username: string, mode: 'link' | 'duo', link?: string) => void;
 }
@@ -43,9 +53,8 @@ export default function DuoInviteModal({
       const query = supabase
         .from('profiles')
         .select('*')
-        .eq('role', 'SOUMIS')
         .neq('id', dominaId)
-        .limit(20);
+        .limit(30);
 
       if (search.trim()) {
         query.ilike('username', `%${search}%`);
@@ -116,7 +125,10 @@ export default function DuoInviteModal({
   const handleInviteDuoLive = async (user: Profile) => {
     setBusyUserId(user.id);
     setBusyMode('duo');
-    const { error } = await sendDuoRequest(user.id);
+    const { error } = await sendDuoRequest(user.id, {
+      sessionTitle,
+      dominaDisplayName,
+    });
     if (error) {
       alert(error);
       setBusyUserId(null);
@@ -159,7 +171,7 @@ export default function DuoInviteModal({
           <div>
             <p className="text-white font-bold">Inviter en Duo</p>
             <p className="text-white/30 text-xs mt-0.5">
-              Lien (hors live) · Notification instantanée si le soumis est déjà sur ce live
+              Lien (copié) · Caméra = notification temps réel (souvent sur le live ou l&apos;app)
             </p>
           </div>
           <button
@@ -174,7 +186,7 @@ export default function DuoInviteModal({
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/20" />
           <input
             type="text"
-            placeholder="Rechercher un soumis..."
+            placeholder="Rechercher un utilisateur..."
             value={search}
             onChange={e => setSearch(e.target.value)}
             autoFocus
@@ -202,7 +214,12 @@ export default function DuoInviteModal({
                 >
                   <Avatar username={user.username} avatarUrl={user.avatar_url} size="sm" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-white text-sm font-medium truncate">{user.username}</p>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <p className="text-white text-sm font-medium truncate">{user.username}</p>
+                      <Badge variant={roleBadgeVariant(user.role)} className="shrink-0 text-[9px] px-1.5 py-0">
+                        {user.role}
+                      </Badge>
+                    </div>
                     <p className="text-white/25 text-xs">
                       {user.coins_balance.toLocaleString()} pièces
                       {onLive && (
@@ -231,28 +248,30 @@ export default function DuoInviteModal({
                         <Link2 size={15} className="text-yellow-500/80" />
                       )}
                     </motion.button>
-                    {onLive && (
-                      <motion.button
-                        type="button"
-                        title="Inviter en Duo (notification)"
-                        whileTap={{ scale: 0.9 }}
-                        onClick={() => handleInviteDuoLive(user)}
-                        disabled={busy || (done && doneMode !== 'duo')}
-                        className={`w-9 h-9 rounded-full flex items-center justify-center transition-all border ${
-                          done && doneMode === 'duo'
-                            ? 'bg-green-700/30 border-green-600/30'
-                            : 'bg-red-800/30 border-red-700/30 hover:bg-red-800/50'
-                        } disabled:opacity-40`}
-                      >
-                        {busy && busyMode === 'duo' ? (
-                          <span className="text-[10px] text-white/50">…</span>
-                        ) : done && doneMode === 'duo' ? (
-                          <Check size={15} className="text-green-400" />
-                        ) : (
-                          <Video size={15} className="text-red-400" />
-                        )}
-                      </motion.button>
-                    )}
+                    <motion.button
+                      type="button"
+                      title={
+                        onLive
+                          ? 'Inviter en Duo (notification — détecté sur ce live)'
+                          : 'Inviter en Duo par notification (temps réel)'
+                      }
+                      whileTap={{ scale: 0.9 }}
+                      onClick={() => handleInviteDuoLive(user)}
+                      disabled={busy || (done && doneMode !== 'duo')}
+                      className={`w-9 h-9 rounded-full flex items-center justify-center transition-all border ${
+                        done && doneMode === 'duo'
+                          ? 'bg-green-700/30 border-green-600/30'
+                          : 'bg-red-800/30 border-red-700/30 hover:bg-red-800/50'
+                      } disabled:opacity-40`}
+                    >
+                      {busy && busyMode === 'duo' ? (
+                        <span className="text-[10px] text-white/50">…</span>
+                      ) : done && doneMode === 'duo' ? (
+                        <Check size={15} className="text-green-400" />
+                      ) : (
+                        <Video size={15} className="text-red-400" />
+                      )}
+                    </motion.button>
                   </div>
                 </motion.div>
               );

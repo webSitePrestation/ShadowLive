@@ -27,6 +27,9 @@ export interface LiveSession {
   started_at: string | null;
   ended_at: string | null;
   created_at: string;
+  min_coins_per_gift?: number | null;
+  max_coins_per_gift?: number | null;
+  cooldown_seconds?: number | null;
 }
 
 export interface ChatMessage {

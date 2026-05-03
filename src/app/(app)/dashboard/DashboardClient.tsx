@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Radio, Plus, LogOut, Users, Clock, ChevronRight, Sparkles, Shield } from 'lucide-react';
+import { Radio, LogOut, Users, Clock, ChevronRight, Sparkles, Shield, Settings2 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import Button from '@/components/ui/Button';
@@ -15,10 +15,18 @@ interface Props {
   sessions: LiveSession[];
 }
 
+const MIN_GIFT_OPTIONS = [5, 10, 25, 50, 100] as const;
+const MAX_GIFT_OPTIONS = [100, 200, 500, 1000, 5000] as const;
+const COOLDOWN_OPTIONS = [0, 5, 10, 30, 60] as const;
+
 export default function DashboardClient({ profile, sessions }: Props) {
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [minGiftIdx, setMinGiftIdx] = useState(1);
+  const [maxGiftIdx, setMaxGiftIdx] = useState(2);
+  const [cooldownIdx, setCooldownIdx] = useState(0);
   const [error, setError] = useState('');
   const router = useRouter();
   const supabase = createClient();
@@ -33,6 +41,12 @@ export default function DashboardClient({ profile, sessions }: Props) {
     setCreating(true);
     setError('');
 
+    let minCoins: number = MIN_GIFT_OPTIONS[minGiftIdx];
+    let maxCoins: number = MAX_GIFT_OPTIONS[maxGiftIdx];
+    if (maxCoins < minCoins) {
+      maxCoins = MAX_GIFT_OPTIONS.find((m) => m >= minCoins) ?? minCoins;
+    }
+
     const { data, error } = await supabase
       .from('live_sessions')
       .insert({
@@ -40,6 +54,9 @@ export default function DashboardClient({ profile, sessions }: Props) {
         title: title.trim(),
         status: 'PENDING',
         agora_channel: crypto.randomUUID(),
+        min_coins_per_gift: minCoins,
+        max_coins_per_gift: maxCoins,
+        cooldown_seconds: COOLDOWN_OPTIONS[cooldownIdx],
       })
       .select()
       .single();
@@ -151,12 +168,84 @@ export default function DashboardClient({ profile, sessions }: Props) {
                     maxLength={80}
                     className="w-full bg-black/50 border border-white/8 rounded-xl px-4 py-3 text-white placeholder-white/15 focus:outline-none focus:border-yellow-700/40 transition-colors text-sm"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvanced((v) => !v)}
+                    className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-left text-yellow-600/90 text-xs font-semibold uppercase tracking-wide hover:border-yellow-800/40"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Settings2 size={14} className="shrink-0 opacity-80" />
+                      Paramètres avancés
+                    </span>
+                    <ChevronRight
+                      size={14}
+                      className={`shrink-0 text-white/35 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
+                    />
+                  </button>
+                  {showAdvanced && (
+                    <div className="space-y-4 rounded-xl border border-white/8 bg-black/50 p-4">
+                      <div>
+                        <label className="block text-yellow-600/90 text-xs font-medium mb-2">
+                          Don minimum : {MIN_GIFT_OPTIONS[minGiftIdx]} pièces
+                        </label>
+                        <input
+                          type="range"
+                          min={0}
+                          max={MIN_GIFT_OPTIONS.length - 1}
+                          step={1}
+                          value={minGiftIdx}
+                          onChange={(e) => setMinGiftIdx(Number(e.target.value))}
+                          className="w-full h-2 cursor-pointer rounded-lg bg-black accent-red-600"
+                          style={{ accentColor: '#dc2626' }}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-yellow-600/90 text-xs font-medium mb-2">
+                          Don maximum : {MAX_GIFT_OPTIONS[maxGiftIdx]} pièces
+                        </label>
+                        <input
+                          type="range"
+                          min={0}
+                          max={MAX_GIFT_OPTIONS.length - 1}
+                          step={1}
+                          value={maxGiftIdx}
+                          onChange={(e) => setMaxGiftIdx(Number(e.target.value))}
+                          className="w-full h-2 cursor-pointer rounded-lg bg-black accent-red-600"
+                          style={{ accentColor: '#dc2626' }}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-yellow-600/90 text-xs font-medium mb-2">
+                          Délai entre dons : {COOLDOWN_OPTIONS[cooldownIdx]}s
+                          {COOLDOWN_OPTIONS[cooldownIdx] === 0 ? ' (illimité)' : ''}
+                        </label>
+                        <input
+                          type="range"
+                          min={0}
+                          max={COOLDOWN_OPTIONS.length - 1}
+                          step={1}
+                          value={cooldownIdx}
+                          onChange={(e) => setCooldownIdx(Number(e.target.value))}
+                          className="w-full h-2 cursor-pointer rounded-lg bg-black accent-red-600"
+                          style={{ accentColor: '#dc2626' }}
+                        />
+                      </div>
+                    </div>
+                  )}
                   {error && <p className="text-red-400 text-xs">{error}</p>}
                   <div className="flex gap-3">
                     <Button
                       variant="ghost"
                       size="md"
-                      onClick={() => { setShowForm(false); setTitle(''); setError(''); }}
+                      onClick={() => {
+                        setShowForm(false);
+                        setTitle('');
+                        setError('');
+                        setShowAdvanced(false);
+                        setMinGiftIdx(1);
+                        setMaxGiftIdx(2);
+                        setCooldownIdx(0);
+                      }}
                       className="flex-1"
                     >
                       Annuler
