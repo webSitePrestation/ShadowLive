@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Mic, MicOff, Video, VideoOff, PhoneOff,
@@ -9,11 +9,11 @@ import {
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { accessTokenExpiresAtIso } from '@/lib/access-token';
-import { useDuoStream } from '@/hooks/useDuoStream';
+import { useMultiStream } from '@/hooks/useMultiStream';
 import { useChat } from '@/hooks/useChat';
 import { useCoins } from '@/hooks/useCoins';
 import { useViewerCount } from '@/hooks/useViewerCount';
-import DuoStage from '@/components/live/DuoStage';
+import StageGrid from '@/components/live/StageGrid';
 import ChatPanel from '@/components/live/ChatPanel';
 import CoinButton from '@/components/live/CoinButton';
 import CoinRain from '@/components/live/CoinRain';
@@ -24,9 +24,14 @@ import InviteToast from '@/components/live/InviteToast';
 import { useInviteNotification } from '@/hooks/useInviteNotification';
 import { useDuoRequest } from '@/hooks/useDuoRequest';
 import { useBan } from '@/hooks/useBan';
+import { useStage } from '@/hooks/useStage';
+import { useStageSignals } from '@/hooks/useStageSignals';
 import { profileIdToAgoraUid } from '@/lib/profile-agora-uid';
 import Badge from '@/components/ui/Badge';
 import FollowButton from '@/components/live/FollowButton';
+import RaiseHandButton from '@/components/live/RaiseHandButton';
+import StageRequestsPanel from '@/components/live/StageRequestsPanel';
+import StageParticipantsList from '@/components/live/StageParticipantsList';
 import type { LiveSession, Profile } from '@/types';
 
 const STANDARD_GIFT_AMOUNTS = [10, 50, 100, 500];
@@ -71,15 +76,33 @@ export default function LiveClient({ session, profile, domina }: Props) {
   const [inviteLink, setInviteLink] = useState('');
   const [coinRainTrigger, setCoinRainTrigger] = useState(0);
   const [lastCoinAmount, setLastCoinAmount] = useState(0);
+  const [showStageAcceptedToast, setShowStageAcceptedToast] = useState(false);
   const [soumisIdsInLive, setSoumisIdsInLive] = useState<string[]>([]);
   const [duoDominaToastName, setDuoDominaToastName] = useState<string | null>(null);
   const [showDuoActivatedOverlay, setShowDuoActivatedOverlay] = useState(false);
   const prevGuestForDuoOverlayRef = useRef<string | null>(session.guest_soumis_id ?? null);
+  /** Handles minuteurs navigateur (`number`), pas `@types/node` Timeout. */
+  const signalToastTimerRef = useRef<number | null>(null);
+  const [signalToastMessage, setSignalToastMessage] = useState<string | null>(null);
+  const [micForcedMuted, setMicForcedMuted] = useState(false);
+  const [camForcedOff, setCamForcedOff] = useState(false);
+
+  const showToast = useCallback((message: string) => {
+    if (signalToastTimerRef.current != null) {
+      window.clearTimeout(signalToastTimerRef.current);
+      signalToastTimerRef.current = null;
+    }
+    setSignalToastMessage(message);
+    signalToastTimerRef.current = window.setTimeout(() => {
+      setSignalToastMessage(null);
+      signalToastTimerRef.current = null;
+    }, 3000) as number;
+  }, []);
 
   const {
     pendingDuoInvite,
-    acceptRequest,
-    declineRequest,
+    acceptRequest: acceptDuoRequest,
+    declineRequest: declineDuoRequest,
     sendDuoRequest,
   } = useDuoRequest({
     sessionId: session.id,
@@ -87,19 +110,176 @@ export default function LiveClient({ session, profile, domina }: Props) {
     isDomina,
   });
 
+  const {
+    stageParticipants,
+    pendingRequests,
+    myRequest,
+    isOnStage,
+    stageCount,
+    canJoinStage,
+    raiseHand,
+    cancelRequest,
+    acceptRequest,
+    declineRequest,
+    removeFromStage,
+    joinStage,
+    leaveStage,
+  } = useStage({
+    sessionId: session.id,
+    profileId: profile.id,
+    isDomina,
+    agoraUid: uidRef.current,
+  });
+
+  const {
+    lastSignal,
+    acknowledgeLastSignal,
+    sendMuteMic,
+    sendUnmuteMic,
+    sendHideCam,
+    sendShowCam,
+    sendRemoveFromStage,
+    sendKick,
+  } = useStageSignals({
+    sessionId: session.id,
+    profileId: profile.id,
+    isDomina,
+  });
+
   const isDuoGuest = Boolean(guestSoumisId && profile.id === guestSoumisId);
-  const agoraRole = isDomina || isDuoGuest ? 'host' : 'audience';
+  const agoraRole = isDomina || isDuoGuest || isOnStage ? 'host' : 'audience';
 
   const {
     localVideoTrack, remoteUsers, joined,
     error: agoraError, micMuted, camOff,
-    toggleMic, toggleCam, tryPublishVideo, kickRemoteUid, leave,
-  } = useDuoStream({
+    toggleMic, toggleCam, tryPublishVideo,
+    muteSelf, unmuteSelf, hideCamSelf, showCamSelf, unpublishAll,
+    kickUser, leave,
+  } = useMultiStream({
     channelName: session.agora_channel,
     uid: uidRef.current,
     role: agoraRole,
     enabled: agoraReady,
   });
+
+  const processedStageSignalIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    processedStageSignalIdsRef.current.clear();
+  }, [session.id]);
+
+  const participantToggleMic = useCallback(() => {
+    if (!isDomina && isOnStage && micForcedMuted && micMuted) {
+      showToast('🔇 La Domina contrôle ton micro');
+      return;
+    }
+    void toggleMic();
+  }, [isDomina, isOnStage, micForcedMuted, micMuted, showToast, toggleMic]);
+
+  const participantToggleCam = useCallback(() => {
+    if (!isDomina && isOnStage && camForcedOff && camOff) {
+      showToast('📷 La Domina contrôle ta caméra');
+      return;
+    }
+    void toggleCam();
+  }, [camForcedOff, camOff, isDomina, isOnStage, showToast, toggleCam]);
+
+  useEffect(() => {
+    if (!isOnStage) {
+      setMicForcedMuted(false);
+      setCamForcedOff(false);
+    }
+  }, [isOnStage]);
+
+  useEffect(() => {
+    if (isDomina || !lastSignal) return;
+    if (processedStageSignalIdsRef.current.has(lastSignal.id)) {
+      acknowledgeLastSignal();
+      return;
+    }
+    processedStageSignalIdsRef.current.add(lastSignal.id);
+
+    const patchMyStageFlags = async (partial: { mic_muted?: boolean; cam_off?: boolean }) => {
+      await supabase
+        .from('stage_participants')
+        .update(partial)
+        .eq('session_id', session.id)
+        .eq('profile_id', profile.id)
+        .eq('is_on_stage', true);
+    };
+
+    const run = async () => {
+      try {
+        switch (lastSignal.action) {
+          case 'MUTE_MIC':
+            await muteSelf();
+            setMicForcedMuted(true);
+            void patchMyStageFlags({ mic_muted: true });
+            showToast('🔇 La Domina a coupé ton micro');
+            break;
+          case 'UNMUTE_MIC':
+            await unmuteSelf();
+            setMicForcedMuted(false);
+            void patchMyStageFlags({ mic_muted: false });
+            break;
+          case 'HIDE_CAM':
+            await hideCamSelf();
+            setCamForcedOff(true);
+            void patchMyStageFlags({ cam_off: true });
+            showToast('📷 La Domina a coupé ta caméra');
+            break;
+          case 'SHOW_CAM':
+            await showCamSelf();
+            setCamForcedOff(false);
+            void patchMyStageFlags({ cam_off: false });
+            break;
+          case 'REMOVE_FROM_STAGE':
+            await unpublishAll();
+            await leaveStage();
+            setMicForcedMuted(false);
+            setCamForcedOff(false);
+            showToast('⬇️ Tu as été descendu de scène');
+            if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+              navigator.vibrate([50, 30, 50]);
+            }
+            break;
+          case 'KICK':
+            await unpublishAll();
+            await leaveStage();
+            await leave();
+            try {
+              sessionStorage.setItem('shadowlive_live_removed', 'Tu as été expulsé(e) du live');
+            } catch {
+              /* ignore */
+            }
+            router.push('/explore');
+            break;
+          default:
+            break;
+        }
+      } finally {
+        acknowledgeLastSignal();
+      }
+    };
+
+    void run();
+  }, [
+    acknowledgeLastSignal,
+    hideCamSelf,
+    isDomina,
+    lastSignal,
+    leave,
+    leaveStage,
+    muteSelf,
+    profile.id,
+    router,
+    session.id,
+    showCamSelf,
+    showToast,
+    supabase,
+    unmuteSelf,
+    unpublishAll,
+  ]);
 
   /** Split vertical dès que le duo est actif en base (sans attendre Agora `joined`) */
   const isDuoLayout = Boolean(guestSoumisId) && (isDomina || isDuoGuest);
@@ -127,6 +307,7 @@ export default function LiveClient({ session, profile, domina }: Props) {
     () => resolveGiftCoinAmounts(minGiftCoins, maxGiftCoins),
     [minGiftCoins, maxGiftCoins]
   );
+  const stageActionCoinAmounts = isOnStage ? coinButtonAmounts.slice(0, 2) : coinButtonAmounts;
 
   const { sendCoins, balance, timeUntilNext } = useCoins(
     session.id,
@@ -293,17 +474,85 @@ export default function LiveClient({ session, profile, domina }: Props) {
     return () => window.clearTimeout(t);
   }, [duoDominaToastName, isDomina]);
 
+  const acceptedStageRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!myRequest || myRequest.status !== 'ACCEPTED') {
+      acceptedStageRef.current = null;
+    }
+  }, [myRequest?.id, myRequest?.status]);
+
+  const leaveStageRef = useRef(leaveStage);
+  leaveStageRef.current = leaveStage;
+  const isOnStageCleanupRef = useRef(false);
+  isOnStageCleanupRef.current = isOnStage;
+
+  const stageLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useLayoutEffect(() => {
+    const clear = () => {
+      if (stageLeaveTimerRef.current) {
+        clearTimeout(stageLeaveTimerRef.current);
+        stageLeaveTimerRef.current = null;
+      }
+    };
+    clear();
+    return clear;
+    // Annule un leaveStage différé au remontage (ex. Strict Mode) tout en le conservant à la vraie sortie de page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onPageHide = () => {
+      if (isOnStageCleanupRef.current) {
+        void leaveStageRef.current();
+      }
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (!isOnStageCleanupRef.current) return;
+      stageLeaveTimerRef.current = setTimeout(() => {
+        stageLeaveTimerRef.current = null;
+        void leaveStageRef.current();
+      }, 0);
+    };
+  }, [session.id]);
+
+  useEffect(() => {
+    if (isDomina) return;
+    if (myRequest?.status !== 'ACCEPTED') return;
+    if (acceptedStageRef.current === myRequest.id) return;
+    acceptedStageRef.current = myRequest.id;
+
+    void joinStage(uidRef.current);
+    if (!agoraReady) setAgoraReady(true);
+    setShowStageAcceptedToast(true);
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      navigator.vibrate([100, 50, 100]);
+    }
+    const t = window.setTimeout(() => setShowStageAcceptedToast(false), 2600);
+    return () => window.clearTimeout(t);
+  }, [agoraReady, isDomina, joinStage, myRequest]);
+
   const handleAcceptDuoRequest = useCallback(async () => {
-    const res = await acceptRequest();
+    const res = await acceptDuoRequest();
     if (res && 'error' in res && res.error) {
       alert(res.error);
       return;
     }
     setAgoraReady(true);
     setShowDuoBanner(true);
-  }, [acceptRequest]);
+  }, [acceptDuoRequest]);
 
   const endLive = useCallback(async () => {
+    if (isOnStage) {
+      await leaveStage();
+    }
     await leave();
     if (isDomina) {
       await supabase
@@ -316,7 +565,7 @@ export default function LiveClient({ session, profile, domina }: Props) {
         .eq('id', session.id);
     }
     router.push('/dashboard');
-  }, [leave, isDomina, session.id, router]);
+  }, [isOnStage, leaveStage, leave, isDomina, session.id, router, supabase]);
 
   const generateInvite = useCallback(async () => {
     const { data } = await supabase
@@ -358,14 +607,24 @@ export default function LiveClient({ session, profile, domina }: Props) {
     [banUser]
   );
 
+  /** Domina : retirer un intervenant (signal Agora + BDD stage / request). */
+  const dominaRemoveIntervenant = useCallback(
+    async (targetProfileId: string) => {
+      if (!isDomina || !targetProfileId || targetProfileId === profile.id || targetProfileId === session.domina_id) return;
+      await sendRemoveFromStage(targetProfileId);
+      await removeFromStage(targetProfileId);
+    },
+    [isDomina, profile.id, removeFromStage, sendRemoveFromStage, session.domina_id]
+  );
+
   const liveBanRedirectRef = useRef(false);
 
   useEffect(() => {
     if (!isDomina || !joined || bannedIds.length === 0) return;
     for (const bid of bannedIds) {
-      void kickRemoteUid(profileIdToAgoraUid(bid));
+      void kickUser(profileIdToAgoraUid(bid));
     }
-  }, [isDomina, joined, bannedIds, kickRemoteUid]);
+  }, [isDomina, joined, bannedIds, kickUser]);
 
   useEffect(() => {
     if (isDomina || liveBanRedirectRef.current) return;
@@ -387,25 +646,27 @@ export default function LiveClient({ session, profile, domina }: Props) {
       )}
       <CoinRain trigger={coinRainTrigger} amount={lastCoinAmount} />
 
-      {/* Video */}
-      <div className="relative flex-1 overflow-hidden">
-        <DuoStage
+      {/* Video : zone sous la barre d’actions (Chrome micro/cam est z-[120]) */}
+      <div className="relative z-0 min-h-0 flex-1 overflow-hidden">
+        <StageGrid
           localVideoTrack={localVideoTrack}
           remoteUsers={remoteUsers}
+          stageParticipants={stageParticipants}
+          localProfile={profile}
+          dominaProfile={domina ?? { id: session.domina_id, username: 'Domina', avatar_url: null }}
           isDomina={isDomina}
-          dominaName={domina?.username ?? 'Domina'}
-          soumisName={
-            isDomina
-              ? duoUsername || undefined
-              : isDuoGuest
-                ? profile.username
-                : undefined
-          }
-          dominaAvatarUrl={domina?.avatar_url}
-          guestAvatarUrl={isDuoGuest ? profile.avatar_url : undefined}
-          isDuoMode={isDuoMode}
-          agoraJoined={joined}
-          onRequestCam={isDuoGuest ? () => void tryPublishVideo() : undefined}
+          onParticipantAction={(targetProfileId, action) => {
+            if (action === 'mute') void sendMuteMic(targetProfileId);
+            if (action === 'hide') void sendHideCam(targetProfileId);
+            if (action === 'remove') {
+              void dominaRemoveIntervenant(targetProfileId);
+            }
+            if (action === 'kick') {
+              void sendKick(targetProfileId);
+              void banUser(targetProfileId);
+              void kickUser(profileIdToAgoraUid(targetProfileId));
+            }
+          }}
         />
 
         {!isDomina && (
@@ -422,9 +683,9 @@ export default function LiveClient({ session, profile, domina }: Props) {
         <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-black/80 to-transparent pointer-events-none" />
         <div className="absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-black/95 via-black/30 to-transparent pointer-events-none" />
 
-        {/* Header */}
-        <div className="absolute top-0 inset-x-0 p-4 flex items-center justify-between z-10">
-          <div className="flex items-center gap-2">
+        {/* Header : droite toujours visible (flex-shrink-0), gauche peut déborder */}
+        <div className="absolute top-0 inset-x-0 z-[20] flex items-start justify-between gap-2 p-4 pointer-events-none">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 overflow-hidden pointer-events-none">
             {isLive ? (
               <Badge variant="live">
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
@@ -433,39 +694,55 @@ export default function LiveClient({ session, profile, domina }: Props) {
             ) : (
               <Badge variant="ghost">OFFLINE</Badge>
             )}
-            <span className="text-white/40 text-xs flex items-center gap-1">
+            <span className="flex shrink-0 items-center gap-1 text-white/40 text-xs">
               <Users size={10} />
               {viewerCount}
             </span>
+            <Badge variant="ghost" className="shrink-0 text-[10px] border border-white/15 text-white/55">
+              👥 {stageCount}/5 sur scène
+            </Badge>
             {isDuoMode && (
               <Badge
                 variant="gold"
-                className="animate-pulse border border-amber-400/60 bg-gradient-to-r from-amber-950/90 to-yellow-900/80 text-amber-100 shadow-[0_0_14px_rgba(251,191,36,0.45)] font-bold tracking-wide"
+                className="shrink-0 animate-pulse border border-amber-400/60 bg-gradient-to-r from-amber-950/90 to-yellow-900/80 text-amber-100 shadow-[0_0_14px_rgba(251,191,36,0.45)] font-bold tracking-wide"
               >
                 ⚡ DUO ACTIF
               </Badge>
             )}
             {isDuoGuest && localVideoTrack && !camOff && (
-              <Badge variant="ghost" className="text-[10px] border border-white/15 text-white/50">
+              <Badge variant="ghost" className="text-[10px] border border-white/15 text-white/50 shrink-0">
                 🎬 Caméra
               </Badge>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2 pointer-events-auto">
+            {isDomina && pendingRequests.length > 0 && (
+              <StageRequestsPanel
+                requests={pendingRequests}
+                onAccept={(requestId, requesterId) =>
+                  void acceptRequest(requestId, requesterId, profileIdToAgoraUid(requesterId))
+                }
+                onDecline={(requestId) => void declineRequest(requestId)}
+              />
+            )}
             {isDomina && isLive && (
               <>
                 <motion.button
                   whileTap={{ scale: 0.9 }}
                   onClick={generateInvite}
-                  className="w-9 h-9 rounded-full glass flex items-center justify-center text-white/50 hover:text-white transition-colors"
+                  type="button"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full glass text-white/50 hover:text-white transition-colors"
+                  aria-label="Partager un lien invité"
                 >
                   <Share2 size={15} />
                 </motion.button>
                 <motion.button
                   whileTap={{ scale: 0.9 }}
+                  type="button"
                   onClick={() => setShowDuo(true)}
-                  className="w-9 h-9 rounded-full glass flex items-center justify-center text-white/50 hover:text-white transition-colors"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full glass text-white/50 hover:text-white transition-colors"
+                  aria-label="Inviter duo"
                 >
                   <UserPlus size={15} />
                 </motion.button>
@@ -473,8 +750,10 @@ export default function LiveClient({ session, profile, domina }: Props) {
             )}
             <motion.button
               whileTap={{ scale: 0.9 }}
+              type="button"
               onClick={() => setShowChat(s => !s)}
-              className="w-9 h-9 rounded-full glass flex items-center justify-center text-white/50 hover:text-white transition-colors"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full glass text-white/50 hover:text-white transition-colors"
+              aria-label="Chat"
             >
               <MessageCircle size={15} />
             </motion.button>
@@ -621,7 +900,7 @@ export default function LiveClient({ session, profile, domina }: Props) {
         <DuoRequestToast
           visible={Boolean(!isDomina && pendingDuoInvite && isLive)}
           onAccept={() => void handleAcceptDuoRequest()}
-          onDecline={() => void declineRequest()}
+          onDecline={() => void declineDuoRequest()}
         />
 
         {/* Bouton démarrer */}
@@ -643,9 +922,34 @@ export default function LiveClient({ session, profile, domina }: Props) {
         )}
 
         {/* Erreur */}
-        <AnimatePresence>
-          {agoraError && (
+        <AnimatePresence mode="sync">
+          {showStageAcceptedToast ? (
             <motion.div
+              key="toast-stage-accepted"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              className="absolute inset-x-4 top-14 z-50 rounded-xl border border-green-600/40 bg-green-900/40 px-3 py-2 text-center text-sm text-green-100"
+            >
+              ✅ Tu es maintenant sur scène !
+            </motion.div>
+          ) : null}
+          {signalToastMessage ? (
+            <motion.div
+              key="toast-signal"
+              layout={false}
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              className="absolute inset-x-4 top-14 z-[130] rounded-xl border border-white/15 bg-neutral-950/92 px-3 py-2 text-center text-sm text-white/90 backdrop-blur-sm"
+            >
+              {signalToastMessage}
+            </motion.div>
+          ) : null}
+          {agoraError ? (
+            <motion.div
+              key="toast-agora-error"
+              layout={false}
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
@@ -653,12 +957,23 @@ export default function LiveClient({ session, profile, domina }: Props) {
             >
               {agoraError}
             </motion.div>
-          )}
+          ) : null}
         </AnimatePresence>
       </div>
 
-      {/* Bottom bar */}
-      <div className="glass border-t border-white/5 px-4 py-3 z-10">
+      {/* Barre chrome : au-dessus de la grille vidéo pour que micro/cam soient toujours cliquables */}
+      <div className="relative z-[120] shrink-0 pointer-events-auto isolate">
+      {isDomina && stageParticipants.length > 0 && (
+        <div className="px-4 pt-2">
+          <StageParticipantsList
+            participants={stageParticipants}
+            dominaProfileId={session.domina_id}
+            isDomina={isDomina}
+            onRemove={(targetProfileId) => void dominaRemoveIntervenant(targetProfileId)}
+          />
+        </div>
+      )}
+      <div className="glass relative z-[120] touch-manipulation border-t border-white/5 px-4 py-3 pointer-events-auto">
         {isDomina ? (
           <div className="flex flex-col gap-1">
             {isDuoMode && (
@@ -707,101 +1022,152 @@ export default function LiveClient({ session, profile, domina }: Props) {
           </div>
         ) : isDuoGuest ? (
           <div className="flex flex-col gap-1 min-h-[52px]">
+            {isLive && (
+              <div className="flex justify-center">
+                <RaiseHandButton
+                  myRequest={myRequest}
+                  canJoinStage={canJoinStage}
+                  isOnStage={isOnStage}
+                  onRaiseHand={() => void raiseHand()}
+                  onCancelRequest={() => void cancelRequest()}
+                />
+              </div>
+            )}
             {isDuoMode && (
               <p className="text-center text-[10px] text-amber-400/95 font-semibold tracking-wide">
                 🎬 Tu es en DUO
               </p>
             )}
             <div className="flex items-center justify-between gap-1.5">
-            <div className="flex items-center gap-1.5 shrink-0">
-              <motion.button
-                whileTap={{ scale: 0.9 }}
-                onClick={toggleMic}
-                disabled={!joined}
-                className={`w-10 h-10 rounded-full flex items-center justify-center transition-all disabled:opacity-20 ${
-                  micMuted ? 'bg-red-900/40 border border-red-700/40' : 'bg-white/8 border border-white/8'
-                }`}
-              >
-                {micMuted ? <MicOff size={16} className="text-red-400" /> : <Mic size={16} className="text-white/70" />}
-              </motion.button>
-              <motion.button
-                whileTap={{ scale: 0.9 }}
-                onClick={toggleCam}
-                disabled={!joined}
-                className={`w-10 h-10 rounded-full flex items-center justify-center transition-all disabled:opacity-20 ${
-                  camOff ? 'bg-red-900/40 border border-red-700/40' : 'bg-white/8 border border-white/8'
-                }`}
-              >
-                {camOff ? <VideoOff size={16} className="text-red-400" /> : <Video size={16} className="text-white/70" />}
-              </motion.button>
-            </div>
-            <div className="flex flex-col flex-1 min-w-0 items-stretch">
-              <div className="flex items-center justify-center gap-0.5 flex-1 min-w-0 overflow-x-auto px-0.5">
-                {timeUntilNext > 0 ? (
+              {isOnStage ? (
+                <div className="flex items-center gap-1.5 shrink-0">
                   <motion.button
-                    type="button"
-                    disabled
-                    className="flex h-10 w-10 min-h-10 min-w-10 shrink-0 flex-col items-center justify-center rounded-xl border border-white/8 bg-white/5 text-center text-[10px] font-semibold leading-tight text-white/45"
+                    whileTap={{ scale: 0.9 }}
+                    onClick={participantToggleMic}
+                    disabled={!joined}
+                    className={`w-10 h-10 rounded-full flex items-center justify-center transition-all disabled:opacity-20 ${
+                      micMuted ? 'bg-red-900/40 border border-red-700/40' : 'bg-white/8 border border-white/8'
+                    }`}
                   >
-                    ⏳ {timeUntilNext}s
+                    {micMuted ? <MicOff size={16} className="text-red-400" /> : <Mic size={16} className="text-white/70" />}
                   </motion.button>
-                ) : (
-                  coinButtonAmounts.map((amount) => (
-                    <CoinButton
-                      key={amount}
-                      amount={amount}
-                      onSend={handleSendCoins}
-                      disabled={balance < amount}
-                      compact
-                    />
-                  ))
-                )}
+                  <motion.button
+                    whileTap={{ scale: 0.9 }}
+                    onClick={participantToggleCam}
+                    disabled={!joined}
+                    className={`w-10 h-10 rounded-full flex items-center justify-center transition-all disabled:opacity-20 ${
+                      camOff ? 'bg-red-900/40 border border-red-700/40' : 'bg-white/8 border border-white/8'
+                    }`}
+                  >
+                    {camOff ? <VideoOff size={16} className="text-red-400" /> : <Video size={16} className="text-white/70" />}
+                  </motion.button>
+                </div>
+              ) : null}
+              <div className="flex flex-col flex-1 min-w-0 items-stretch">
+                <div className="flex items-center justify-center gap-0.5 flex-1 min-w-0 overflow-x-auto px-0.5">
+                  {timeUntilNext > 0 ? (
+                    <motion.button
+                      type="button"
+                      disabled
+                      className="flex h-10 w-10 min-h-10 min-w-10 shrink-0 flex-col items-center justify-center rounded-xl border border-white/8 bg-white/5 text-center text-[10px] font-semibold leading-tight text-white/45"
+                    >
+                      ⏳ {timeUntilNext}s
+                    </motion.button>
+                  ) : (
+                    stageActionCoinAmounts.map((amount) => (
+                      <CoinButton
+                        key={amount}
+                        amount={amount}
+                        onSend={handleSendCoins}
+                        disabled={balance < amount}
+                        compact
+                      />
+                    ))
+                  )}
+                </div>
+                {giftRulesLine}
               </div>
-              {giftRulesLine}
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                onClick={endLive}
+                className="w-10 h-10 rounded-full bg-white/5 border border-white/8 flex items-center justify-center shrink-0"
+              >
+                <PhoneOff size={16} className="text-white/30" />
+              </motion.button>
             </div>
-            <motion.button
-              whileTap={{ scale: 0.9 }}
-              onClick={endLive}
-              className="w-10 h-10 rounded-full bg-white/5 border border-white/8 flex items-center justify-center shrink-0"
-            >
-              <PhoneOff size={16} className="text-white/30" />
-            </motion.button>
-          </div>
           </div>
         ) : (
-          <div className="flex items-start justify-around gap-2">
-            <div className="flex flex-1 flex-col items-center gap-0.5 min-w-0">
-              <div className="flex items-center justify-center gap-1.5">
-                {timeUntilNext > 0 ? (
-                  <motion.button
-                    type="button"
-                    disabled
-                    className="flex h-14 w-14 min-h-[56px] min-w-[56px] shrink-0 flex-col items-center justify-center rounded-xl border border-white/8 bg-white/5 text-xs font-semibold text-white/45"
-                  >
-                    ⏳ {timeUntilNext}s
-                  </motion.button>
-                ) : (
-                  coinButtonAmounts.map((amount) => (
-                    <CoinButton
-                      key={amount}
-                      amount={amount}
-                      onSend={handleSendCoins}
-                      disabled={balance < amount}
-                    />
-                  ))
-                )}
+          <div className="flex flex-col items-stretch justify-around gap-2">
+            {isLive && (
+              <div className="flex justify-center">
+                <RaiseHandButton
+                  myRequest={myRequest}
+                  canJoinStage={canJoinStage}
+                  isOnStage={isOnStage}
+                  onRaiseHand={() => void raiseHand()}
+                  onCancelRequest={() => void cancelRequest()}
+                />
               </div>
-              {giftRulesLine}
+            )}
+            <div className="flex items-start justify-around gap-2">
+              {isOnStage ? (
+                <div className="flex items-center gap-2">
+                  <motion.button
+                    whileTap={{ scale: 0.9 }}
+                    onClick={participantToggleMic}
+                    disabled={!joined}
+                    className={`w-10 h-10 rounded-full flex items-center justify-center transition-all disabled:opacity-20 ${
+                      micMuted ? 'bg-red-900/40 border border-red-700/40' : 'bg-white/8 border border-white/8'
+                    }`}
+                  >
+                    {micMuted ? <MicOff size={16} className="text-red-400" /> : <Mic size={16} className="text-white/70" />}
+                  </motion.button>
+                  <motion.button
+                    whileTap={{ scale: 0.9 }}
+                    onClick={participantToggleCam}
+                    disabled={!joined}
+                    className={`w-10 h-10 rounded-full flex items-center justify-center transition-all disabled:opacity-20 ${
+                      camOff ? 'bg-red-900/40 border border-red-700/40' : 'bg-white/8 border border-white/8'
+                    }`}
+                  >
+                    {camOff ? <VideoOff size={16} className="text-red-400" /> : <Video size={16} className="text-white/70" />}
+                  </motion.button>
+                </div>
+              ) : null}
+              <div className="flex flex-1 flex-col items-center gap-0.5 min-w-0">
+                <div className="flex items-center justify-center gap-1.5">
+                  {timeUntilNext > 0 ? (
+                    <motion.button
+                      type="button"
+                      disabled
+                      className="flex h-14 w-14 min-h-[56px] min-w-[56px] shrink-0 flex-col items-center justify-center rounded-xl border border-white/8 bg-white/5 text-xs font-semibold text-white/45"
+                    >
+                      ⏳ {timeUntilNext}s
+                    </motion.button>
+                  ) : (
+                    stageActionCoinAmounts.map((amount) => (
+                      <CoinButton
+                        key={amount}
+                        amount={amount}
+                        onSend={handleSendCoins}
+                        disabled={balance < amount}
+                      />
+                    ))
+                  )}
+                </div>
+                {giftRulesLine}
+              </div>
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                onClick={endLive}
+                className="mt-0.5 w-12 h-12 shrink-0 rounded-full bg-white/5 border border-white/8 flex items-center justify-center"
+              >
+                <PhoneOff size={17} className="text-white/30" />
+              </motion.button>
             </div>
-            <motion.button
-              whileTap={{ scale: 0.9 }}
-              onClick={endLive}
-              className="mt-0.5 w-12 h-12 shrink-0 rounded-full bg-white/5 border border-white/8 flex items-center justify-center"
-            >
-              <PhoneOff size={17} className="text-white/30" />
-            </motion.button>
           </div>
         )}
+      </div>
       </div>
 
       {/* Overlays */}

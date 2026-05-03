@@ -74,3 +74,29 @@ export interface AccessToken {
   expires_at: string | null;
   created_at: string;
 }
+
+export type StageRequestStatus = 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'REMOVED';
+export type StageRequestType = 'RAISE_HAND' | 'DUO_INVITE';
+
+export interface StageRequest {
+  id: string;
+  session_id: string;
+  requester_id: string;
+  status: StageRequestStatus;
+  type: StageRequestType;
+  created_at: string;
+  updated_at: string;
+  requester?: Pick<Profile, 'id' | 'username' | 'avatar_url' | 'role'>;
+}
+
+export interface StageParticipant {
+  id: string;
+  session_id: string;
+  profile_id: string;
+  agora_uid: number;
+  mic_muted: boolean;
+  cam_off: boolean;
+  is_on_stage: boolean;
+  joined_at: string;
+  profile?: Pick<Profile, 'id' | 'username' | 'avatar_url' | 'role'>;
+}

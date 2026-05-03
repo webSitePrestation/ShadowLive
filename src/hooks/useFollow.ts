@@ -1,13 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
 export function useFollow(followerId: string, followingId: string) {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [isFollowing, setIsFollowing] = useState(false);
   const [followersCount, setFollowersCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  /** `false` au premier rendu SSR + hydratation : évite `disabled` incohérent (true vs null). */
+  const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     const [{ count }, { data: row }] = await Promise.all([
@@ -25,13 +26,25 @@ export function useFollow(followerId: string, followingId: string) {
 
     setFollowersCount(count ?? 0);
     setIsFollowing(Boolean(row));
-    setLoading(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- client Supabase
-  }, [followerId, followingId]);
+  }, [followerId, followingId, supabase]);
 
   useEffect(() => {
-    setLoading(true);
-    void refresh();
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      try {
+        await refresh();
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
   }, [refresh]);
 
   const toggleFollow = useCallback(async () => {
@@ -55,7 +68,7 @@ export function useFollow(followerId: string, followingId: string) {
     } finally {
       setLoading(false);
     }
-  }, [isFollowing, followerId, followingId, refresh]);
+  }, [isFollowing, followerId, followingId, refresh, supabase]);
 
   return { isFollowing, followersCount, toggleFollow, loading, refresh };
 }

@@ -43,9 +43,11 @@ export default function FollowButton({ followerId, followingId, showCountBelow }
       </AnimatePresence>
 
       <motion.button
+        suppressHydrationWarning
         type="button"
         whileTap={{ scale: 0.9 }}
-        disabled={loading}
+        disabled={Boolean(loading)}
+        aria-busy={loading}
         onClick={() => void handleClick()}
         className={
           isFollowing
