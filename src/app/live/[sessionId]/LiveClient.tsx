@@ -162,12 +162,6 @@ export default function LiveClient({ session, profile, domina }: Props) {
     enabled: agoraReady,
   });
 
-  const processedStageSignalIdsRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    processedStageSignalIdsRef.current.clear();
-  }, [session.id]);
-
   const participantToggleMic = useCallback(() => {
     if (!isDomina && isOnStage && micForcedMuted && micMuted) {
       showToast('🔇 La Domina contrôle ton micro');
@@ -191,13 +185,20 @@ export default function LiveClient({ session, profile, domina }: Props) {
     }
   }, [isOnStage]);
 
+  const wasSoumisOnStageRef = useRef(false);
   useEffect(() => {
-    if (isDomina || !lastSignal) return;
-    if (processedStageSignalIdsRef.current.has(lastSignal.id)) {
-      acknowledgeLastSignal();
+    if (isDomina) {
+      wasSoumisOnStageRef.current = false;
       return;
     }
-    processedStageSignalIdsRef.current.add(lastSignal.id);
+    if (wasSoumisOnStageRef.current && !isOnStage) {
+      void unpublishAll();
+    }
+    wasSoumisOnStageRef.current = isOnStage;
+  }, [isDomina, isOnStage, unpublishAll]);
+
+  useEffect(() => {
+    if (isDomina || !lastSignal) return;
 
     const patchMyStageFlags = async (partial: { mic_muted?: boolean; cam_off?: boolean }) => {
       await supabase
@@ -358,12 +359,14 @@ export default function LiveClient({ session, profile, domina }: Props) {
   }, [starting, session.id, session.title, profile.username, supabase]);
 
   useEffect(() => {
-    if (!isDomina && session.status === 'LIVE') setAgoraReady(true);
-  }, [isDomina, session.status]);
+    if (!isDomina && (session.status === 'LIVE' || isLive)) setAgoraReady(true);
+  }, [isDomina, session.status, isLive]);
 
   useEffect(() => {
+    liveEndedRedirectRef.current = false;
+    const channelName = `live_sessions:${session.id}:${profile.id}`;
     const ch = supabase
-      .channel(`live-session:${session.id}`)
+      .channel(channelName)
       .on(
         'postgres_changes',
         {
@@ -377,13 +380,29 @@ export default function LiveClient({ session, profile, domina }: Props) {
           if (next.guest_soumis_id !== undefined) {
             setGuestSoumisId(next.guest_soumis_id);
           }
+          if (next.status === 'ENDED') {
+            setIsLive(false);
+            if (!isDominaRef.current && !liveEndedRedirectRef.current) {
+              liveEndedRedirectRef.current = true;
+              void leaveRef.current();
+              try {
+                sessionStorage.setItem('shadowlive_live_removed', 'Le live est terminé');
+              } catch {
+                /* ignore */
+              }
+              router.replace('/explore');
+            }
+          }
+          if (next.status === 'LIVE') {
+            setIsLive(true);
+          }
         }
       )
       .subscribe();
     return () => {
-      supabase.removeChannel(ch);
+      void supabase.removeChannel(ch);
     };
-  }, [session.id]);
+  }, [session.id, profile.id, router, supabase]);
 
   useEffect(() => {
     if (isDuoGuest && guestSoumisId) {
@@ -618,6 +637,11 @@ export default function LiveClient({ session, profile, domina }: Props) {
   );
 
   const liveBanRedirectRef = useRef(false);
+  const liveEndedRedirectRef = useRef(false);
+  const leaveRef = useRef(leave);
+  leaveRef.current = leave;
+  const isDominaRef = useRef(isDomina);
+  isDominaRef.current = isDomina;
 
   useEffect(() => {
     if (!isDomina || !joined || bannedIds.length === 0) return;

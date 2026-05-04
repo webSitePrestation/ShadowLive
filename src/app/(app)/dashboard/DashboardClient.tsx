@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Radio, LogOut, Users, Clock, ChevronRight, Sparkles, Shield, Settings2 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
@@ -19,7 +19,8 @@ const MIN_GIFT_OPTIONS = [5, 10, 25, 50, 100] as const;
 const MAX_GIFT_OPTIONS = [100, 200, 500, 1000, 5000] as const;
 const COOLDOWN_OPTIONS = [0, 5, 10, 30, 60] as const;
 
-export default function DashboardClient({ profile, sessions }: Props) {
+export default function DashboardClient({ profile, sessions: initialSessions }: Props) {
+  const [sessions, setSessions] = useState(initialSessions);
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -29,7 +30,45 @@ export default function DashboardClient({ profile, sessions }: Props) {
   const [cooldownIdx, setCooldownIdx] = useState(0);
   const [error, setError] = useState('');
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
+
+  useEffect(() => {
+    setSessions(initialSessions);
+  }, [initialSessions]);
+
+  const refetchSessions = useCallback(async () => {
+    const { data } = await supabase
+      .from('live_sessions')
+      .select('*')
+      .eq('domina_id', profile.id)
+      .order('created_at', { ascending: false })
+      .limit(10);
+    setSessions((data ?? []) as LiveSession[]);
+  }, [profile.id, supabase]);
+
+  useEffect(() => {
+    const channelName = `dashboard:live_sessions:${profile.id}`;
+    const ch = supabase
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'live_sessions',
+          filter: `domina_id=eq.${profile.id}`,
+        },
+        () => {
+          void refetchSessions();
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') void refetchSessions();
+      });
+    return () => {
+      void supabase.removeChannel(ch);
+    };
+  }, [supabase, profile.id, refetchSessions]);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();

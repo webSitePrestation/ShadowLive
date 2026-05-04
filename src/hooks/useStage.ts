@@ -99,8 +99,9 @@ export function useStage({ sessionId, profileId, isDomina, agoraUid }: UseStageA
   }, [isOnStage, refreshMyRequest]);
 
   useEffect(() => {
+    const channelName = `stage:live_sessions:${sessionId}:${profileId}`;
     const ch = supabase
-      .channel(`stage:${sessionId}`)
+      .channel(channelName)
       .on(
         'postgres_changes',
         {
@@ -177,13 +178,26 @@ export function useStage({ sessionId, profileId, isDomina, agoraUid }: UseStageA
           if (isDomina) void refreshPendingRequests();
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          void refreshStageParticipants();
+          void refreshMyRequest();
+          void refreshPendingRequests();
+        }
+      });
 
     return () => {
       void supabase.removeChannel(ch);
     };
-    // Réouvre le flux si refreshPendingRequests ou isDomina changent après login / profil chargé.
-  }, [isDomina, profileId, refreshPendingRequests, sessionId, supabase]);
+  }, [
+    isDomina,
+    profileId,
+    refreshMyRequest,
+    refreshPendingRequests,
+    refreshStageParticipants,
+    sessionId,
+    supabase,
+  ]);
 
   const raiseHand = useCallback(async () => {
     const now = new Date().toISOString();

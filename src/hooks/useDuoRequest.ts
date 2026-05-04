@@ -266,7 +266,19 @@ export function useDuoRequest({ sessionId, profileId, isDomina }: UseDuoRequestA
 
       if (!cancelled) {
         channelRef.current = ch;
-        ch.subscribe();
+        ch.subscribe(async (status) => {
+          if (status !== 'SUBSCRIBED' || cancelled || tableMissing) return;
+          const { data: pending } = await supabase
+            .from('duo_requests')
+            .select('*')
+            .eq('session_id', sessionId)
+            .eq('soumis_id', profileId)
+            .eq('status', 'PENDING')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (!cancelled && pending) setPendingRequest(pending as DuoRequest);
+        });
       }
     })();
 

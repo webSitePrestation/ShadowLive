@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
 export type StageSignalAction =
@@ -22,9 +22,12 @@ interface UseStageSignalsArgs {
   isDomina: boolean;
 }
 
+const PROCESSED_SIGNAL_IDS_CAP = 200;
+
 export function useStageSignals({ sessionId, profileId, isDomina }: UseStageSignalsArgs) {
   const supabase = useMemo(() => createClient(), []);
   const [lastSignal, setLastSignal] = useState<StageSignalPayload | null>(null);
+  const processedSignalIdsRef = useRef<Set<string>>(new Set());
 
   const acknowledgeLastSignal = useCallback(() => setLastSignal(null), []);
 
@@ -94,23 +97,31 @@ export function useStageSignals({ sessionId, profileId, isDomina }: UseStageSign
   useEffect(() => {
     if (isDomina) return;
 
+    processedSignalIdsRef.current.clear();
+
     const ch = supabase
-      .channel(`stage-signals:${sessionId}:${profileId}`)
+      .channel(`stage_signals:${sessionId}:${profileId}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'stage_signals',
-          filter: `session_id=eq.${sessionId}`,
+          filter: `target_profile_id=eq.${profileId}`,
         },
         (payload) => {
           const row = payload.new as {
             id?: string;
+            session_id?: string;
             target_profile_id?: string;
             action?: string;
           };
-          if (!row?.id || !row.action || row.target_profile_id !== profileId) return;
+          if (!row?.id || !row.action || row.session_id !== sessionId) return;
+          if (processedSignalIdsRef.current.has(row.id)) return;
+          processedSignalIdsRef.current.add(row.id);
+          if (processedSignalIdsRef.current.size > PROCESSED_SIGNAL_IDS_CAP) {
+            processedSignalIdsRef.current.clear();
+          }
           const a = row.action as StageSignalAction;
           setLastSignal({ id: row.id, action: a });
         }
@@ -120,8 +131,7 @@ export function useStageSignals({ sessionId, profileId, isDomina }: UseStageSign
     return () => {
       void supabase.removeChannel(ch);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- client Supabase
-  }, [isDomina, sessionId, profileId]);
+  }, [isDomina, sessionId, profileId, supabase]);
 
   return {
     lastSignal,

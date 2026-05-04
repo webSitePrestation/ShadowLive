@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Radio, LogOut, UserCircle, Link2 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
@@ -36,7 +36,7 @@ export default function ExploreClient({
   const [joinInput, setJoinInput] = useState('');
   const [joinError, setJoinError] = useState<string | null>(null);
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const { supported: pushSupported, permission, requestPermission } = usePushNotification();
 
   useEffect(() => {
@@ -107,8 +107,9 @@ export default function ExploreClient({
   }, [supabase, enrichLiveSessions]);
 
   useEffect(() => {
+    const channelName = `explore:live_sessions:${profile.id}`;
     const channel = supabase
-      .channel('live_sessions_changes')
+      .channel(channelName)
       .on(
         'postgres_changes',
         {
@@ -120,12 +121,14 @@ export default function ExploreClient({
           void refetchLiveSessions();
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') void refetchLiveSessions();
+      });
 
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [supabase, refetchLiveSessions]);
+  }, [supabase, refetchLiveSessions, profile.id]);
 
   const handleJoinByLink = () => {
     setJoinError(null);
